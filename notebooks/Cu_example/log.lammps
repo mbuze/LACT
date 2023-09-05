@@ -1,0 +1,144 @@
+LAMMPS (23 Jun 2022 - Update 4)
+OMP_NUM_THREADS environment is not set. Defaulting to 1 thread. (src/src/comm.cpp:98)
+  using 1 OpenMP thread(s) per MPI task
+
+# ------------------------ INITIALIZATION ----------------------------
+processors    * * *
+units         metal
+dimension    3
+boundary    p    p    p
+atom_style   atomic
+atom_modify map yes
+
+
+box        tilt large
+#--------------------------- LAMMPS Data File--------------------------
+#read_data    input_data/thicker_domain.lmp
+read_data    input_data/4b_step.lmp
+Reading data file ...
+  orthogonal box = (-64.340989 0 380) to (107.36002 4.4274527 500)
+  1 by 1 by 1 MPI processor grid
+  reading atoms ...
+  4630 atoms
+  reading velocities ...
+  4630 velocities
+  read_data CPU = 0.034 seconds
+change_box    all triclinic
+Changing box ...
+  triclinic box = (-64.340989 0 380) to (107.36002 4.4274527 500) with tilt (0 0 0)
+reset_atom_ids sort yes
+Resetting atom IDs ...
+Neighbor list info ...
+  update every 1 steps, delay 10 steps, check yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 0
+  ghost atom cutoff = 0
+  binsize = 171.70101, bins = 1 1 1
+  0 neighbor lists, perpetual/occasional/extra = 0 0 0
+WARNING: Communication cutoff is 0.0. No ghost atoms will be generated. Atoms may get lost. (src/src/comm_brick.cpp:210)
+
+#--------------
+pair_style    eam/alloy
+pair_coeff    * * input_data/Cu_mishin1.eam.alloy Cu
+Reading eam/alloy potential file input_data/Cu_mishin1.eam.alloy with DATE: 2007-10-12
+
+#-------------------Various continuation commands----------------------
+compute forces all property/atom fx fy fz
+compute ids all property/atom id
+compute x_check all property/atom x y z
+#atom_modify map yes
+read_dump dumps/thin_domain/minimise_dump/minimise_dump_44 0 x y z box yes
+Scanning dump file ...
+Reading snapshot from dump file ...
+  triclinic box = (-60.040989 0 380) to (103.06002 4.4274527 500) with tilt (0 0 0)
+  4630 atoms before read
+  4630 atoms in snapshot
+  0 atoms purged
+  4630 atoms replaced
+  0 atoms trimmed
+  0 atoms added
+  4630 atoms after read
+run 0
+WARNING: No fixes with time integration, atoms won't move (src/src/verlet.cpp:60)
+Neighbor list info ...
+  update every 1 steps, delay 10 steps, check yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 7.50679
+  ghost atom cutoff = 7.50679
+  binsize = 3.753395, bins = 44 2 32
+  1 neighbor lists, perpetual/occasional/extra = 1 0 0
+  (1) pair eam/alloy, perpetual
+      attributes: half, newton on
+      pair build: half/bin/newton/tri
+      stencil: half/bin/3d/tri
+      bin: standard
+Per MPI rank memory allocation (min/avg/max) = 8.653 | 8.653 | 8.653 Mbytes
+   Step          Temp          E_pair         E_mol          TotEng         Press     
+         0   1.1766422e-06 -16189.809      0             -16189.809      16641.267    
+Loop time of 1.475e-06 on 1 procs for 0 steps with 4630 atoms
+
+135.6% CPU use with 1 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0          | 0          | 0          |   0.0 |  0.00
+Neigh   | 0          | 0          | 0          |   0.0 |  0.00
+Comm    | 0          | 0          | 0          |   0.0 |  0.00
+Output  | 0          | 0          | 0          |   0.0 |  0.00
+Modify  | 0          | 0          | 0          |   0.0 |  0.00
+Other   |            | 1.475e-06  |            |       |100.00
+
+Nlocal:           4630 ave        4630 max        4630 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+Nghost:          17559 ave       17559 max       17559 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+Neighs:         334219 ave      334219 max      334219 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+
+Total # of neighbors = 334219
+Ave neighs/atom = 72.185529
+Neighbor list builds = 0
+Dangerous builds = 0
+write_dump all custom dumps/thin_domain/continuation_dumps/default_branch/dump_1 id type x y z xu yu zu
+read_dump dumps/thin_domain/minimise_dump/minimise_dump_45 0 x y z box yes
+Scanning dump file ...
+Reading snapshot from dump file ...
+  triclinic box = (-59.940989 0 380) to (102.96002 4.4274527 500) with tilt (0 0 0)
+  4630 atoms before read
+  4630 atoms in snapshot
+  0 atoms purged
+  4630 atoms replaced
+  0 atoms trimmed
+  0 atoms added
+  4630 atoms after read
+run 0
+WARNING: No fixes with time integration, atoms won't move (src/src/verlet.cpp:60)
+Per MPI rank memory allocation (min/avg/max) = 8.653 | 8.653 | 8.653 Mbytes
+   Step          Temp          E_pair         E_mol          TotEng         Press     
+         0   1.1766422e-06 -16186.955      0             -16186.955      17169.126    
+Loop time of 1.684e-06 on 1 procs for 0 steps with 4630 atoms
+
+118.8% CPU use with 1 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0          | 0          | 0          |   0.0 |  0.00
+Neigh   | 0          | 0          | 0          |   0.0 |  0.00
+Comm    | 0          | 0          | 0          |   0.0 |  0.00
+Output  | 0          | 0          | 0          |   0.0 |  0.00
+Modify  | 0          | 0          | 0          |   0.0 |  0.00
+Other   |            | 1.684e-06  |            |       |100.00
+
+Nlocal:           4630 ave        4630 max        4630 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+Nghost:          17566 ave       17566 max       17566 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+Neighs:         334349 ave      334349 max      334349 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+
+Total # of neighbors = 334349
+Ave neighs/atom = 72.213607
+Neighbor list builds = 0
+Dangerous builds = 0

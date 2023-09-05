@@ -1,0 +1,5 @@
+*.ipynb_checkpoints/
+
+LACT.egg-info/
+
+**/__pycache__/

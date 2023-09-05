@@ -1,0 +1,46 @@
+#LAMMPS input file to apply strain rate eps_zx=1e8 /s to Cu
+
+# ------------------------ INITIALIZATION ----------------------------
+processors    * * *
+units         metal
+dimension    3
+boundary    p    p    p
+atom_style   atomic
+box        tilt large
+#--------------------------- LAMMPS Data File--------------------------
+read_data    4b_step.lmp # 2step_struc.lmp #dipole_diff_glideplane_Cu_0.lmp
+change_box    all triclinic
+#--------------
+pair_style    eam/alloy
+pair_coeff    * * Cu_mishin1.eam.alloy Cu
+
+#------------------------------------------------------
+# Thermal equilibration
+#reset_timestep    0
+timestep 0.001
+
+#minimize   0 1e-5 10000 10000
+#variable eps loop 5
+#label loop
+#variable u equal -${eps}*0.02+1
+#change_box all x scale $u remap units box
+#fix        relax all box/relax iso 0.0 
+#minimize   0 1e-5 10000 10000
+
+#write_data relaxed_strech_$u.lmp
+#unfix relax
+#next eps
+#jump in.relax loop
+dump 1 all atom 100 dump_*.lammpstrj
+fix 1 all deform 1 x erate -0.01 remap x
+fix 2 all langevin 10 10 5 1234
+fix ensemble all nve 
+
+thermo 100
+thermo_style custom step temp pe lx 
+run 10000
+
+# SIMULATION DONE
+print "All done"
+
+
