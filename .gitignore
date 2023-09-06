@@ -3,3 +3,5 @@
 LACT.egg-info/
 
 **/__pycache__/
+
+*.lammps
