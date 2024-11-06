@@ -31,7 +31,7 @@ class atom_cont_system:
 
         self.change_cont_param = lambda x : update_command(x,self.org_box)
 
-        if parallel:
+        if parallel and comm is not None:
             rank = comm.Get_rank()
             size = comm.Get_size()
             self.rank = rank
