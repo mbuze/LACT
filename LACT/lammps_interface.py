@@ -214,7 +214,10 @@ class atom_cont_system:
 
 
 class atom_cont_system_remappable:
-    def __init__(self,lmp,update_command,comm=None):
+    def __init__(self,
+                 lmp,
+                 update_command,
+                 comm=None):
         self.lmp = lmp
         self.natoms = lmp.extract_global("natoms")
         self.ref_X = np.reshape(
@@ -222,11 +225,11 @@ class atom_cont_system_remappable:
             (self.natoms, 3),
             ).copy()
         self.data = {
-            "Y_mus": [],
-            "Y_s": [],
-            "ds_s": []
+             "Y_s": [],
+            "ds_s": [],
         }
-
+        self.initial_step = 0
+        self.overrule_ds = None
         self.change_cont_param = lambda x : update_command(x)
 
         if parallel and comm is not None:
@@ -240,7 +243,7 @@ class atom_cont_system_remappable:
             self.size = 1
             self.comm = None
 
-    def set_u0_and_μ0(self, U_0, mu_0, image_arr_0):
+    def set_u0_and_μ0(self, U_0, mu_0): #image_arr_0
         """set initial states for continuation,
         U_0 is the initial atomic positions (N, 3) and 
         mu_0 is the initial continuation parameter"""
@@ -248,7 +251,8 @@ class atom_cont_system_remappable:
             print("setting initial states...")
         self.U_0 = U_0
         self.μ_0 = mu_0
-        self.image_arr_0 = image_arr_0
+        self.image_arr_0 = np.zeros((self.natoms,3)) 
+        #zeros because U_0 is the reference
 
     def reset_atoms_and_μ(self):
         """reset atom positions in LAMMPS to U_0 and μ to μ_0"""
@@ -270,8 +274,8 @@ class atom_cont_system_remappable:
         boxlo = cell[0]
         boxhi = cell[1]
         xy = cell[2]
-        xz = cell[3]
-        yz = cell[4]
+        yz = cell[3]
+        xz = cell[4]
         a_vec = np.array([boxhi[0]-boxlo[0],0,0])
         b_vec = np.array([xy,boxhi[1]-boxlo[1],0])
         c_vec = np.array([xz,yz,boxhi[2]-boxlo[2]])
@@ -292,8 +296,8 @@ class atom_cont_system_remappable:
         boxlo = cell[0]
         boxhi = cell[1]
         xy = cell[2]
-        xz = cell[3]
-        yz = cell[4]
+        yz = cell[3]
+        xz = cell[4]
         a_vec = np.array([boxhi[0]-boxlo[0],0,0])
         b_vec = np.array([xy,boxhi[1]-boxlo[1],0])
         c_vec = np.array([xz,yz,boxhi[2]-boxlo[2]])
@@ -315,7 +319,7 @@ class atom_cont_system_remappable:
         X += Y[:-1].reshape(self.natoms,3)
         self.update_lammps_positions(X, image_arr)
         
-    def quasi_static_run(self,μ_start,increment,n_iter,verbose=False):
+    def quasi_static_run(self,μ_start,increment,n_iter,verbose=False,reset_u0=True):
         if self.rank == 0:
             print('''
             %%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -326,14 +330,14 @@ class atom_cont_system_remappable:
                 print("Warning: System contains some data already!")
 
         for k in range(n_iter):
-            if k>0:
+            if k>0 or not reset_u0:
                 #reset structure to initial state
                 self.reset_atoms_and_μ()
             # increment continuation parameter
             μ = μ_start + k*increment
             self.lmp.commands_string(self.change_cont_param(μ))
             self.lmp.command('run 0')
-            if k>0:
+            if k>0 or not reset_u0:
                 # get positions after continuation shift
                 _X_mu_only, image_arr = self.get_positions_from_lammps()
                 # add previous minimisation to atom positions
@@ -341,18 +345,19 @@ class atom_cont_system_remappable:
             
             self.lmp.command('run 0')
             self.lmp.command('min_style cg')
-            self.lmp.command('minimize 0 1e-5 3000 3000')
-            if k == 0:
+            self.lmp.command('minimize 0 1e-8 5000 5000')
+            if k == 0 and reset_u0:
                 self.lmp.command('set group all image 0 0 0')
             _X, image_arr = self.get_positions_from_lammps()
             self.lmp.command('reset_timestep 0')
-            if k == 0:
-                self.set_u0_and_μ0(_X,μ,image_arr)
+            if k == 0 and reset_u0:
+                self.set_u0_and_μ0(_X,μ) #image_arr
                 #initial atomistic corrector is 0
                 _Y = np.append(np.zeros_like(_X.flatten()),μ)
             else:
                 _Y = np.append((_X.flatten() - _X_mu_only.flatten()),μ)
             self.data["Y_s"] += [_Y]
+
             if self.rank == 0:
                 print("final Y is ",_Y)
                 print("abs(Y) max is ",np.max(np.abs(_Y)))
@@ -419,7 +424,7 @@ class atom_cont_system_remappable:
                        args=(ds),
                        method='krylov',
                        options={'disp': verbose,
-                                'fatol': 1e-4,
+                                'fatol': 1e-5,
                                 'maxiter': maxiter,
                                 'line_search': 'armijo' ,
                                 'jac_options': {'inner_M': None, 
@@ -434,15 +439,27 @@ class atom_cont_system_remappable:
                      ds_largest = 2e0,
                      verbose=True,
                      maxiter=6,
+                     exit_on_turn=False,
+                     checkpoint_freq=5,
+                     checkpoint_path='./checkpoints',
+                     min_steps=0
                     ):
         if self.rank == 0:
             print('''
             %%%%%%%%%%%%%%%%%%%%%%%%%%%
             A continuation run: solve extended system to find points on the solution path.
             ''')
+        self.clear_checkpoint(checkpoint_path)
         counter = 0
-        ds = ds_default
-        for k in range(n_iter):
+        accepted_steps = 0
+        if self.overrule_ds is not None:
+            print('Overruling initial ds from checkpoint')
+            ds = self.overrule_ds
+        else:
+            ds = ds_default
+        for k in range(self.initial_step, n_iter):
+            if checkpoint_freq > 0 and len(self.data['Y_s']) % checkpoint_freq == 0:
+                self.write_checkpoint(checkpoint_path, checkpoint_freq)
             Y_1 = self.continuation_step(ds,verbose=verbose,maxiter=maxiter)
             if Y_1.success == False:
                 ds = ds/2
@@ -465,6 +482,8 @@ class atom_cont_system_remappable:
                     if self.rank == 0:
                         print("ds doubled, now equal to ", ds, ".")
                     counter = 0
+                
+                accepted_steps += 1
 
                 Ys = self.data["Y_s"]
                 if self.rank == 0:
@@ -472,21 +491,23 @@ class atom_cont_system_remappable:
                 if np.sign(Ys[-1][-1] - Ys[-2][-1])*np.sign(Ys[-2][-1] - Ys[-3][-1]) < 0.0:
                     if self.rank == 0:
                         print("turn, turn, turn")
+                    if exit_on_turn and accepted_steps > min_steps:
+                        break
                     
                     
-    def dump_data(self,path,file_name):
+    def dump_data(self,path,file_name,replace=True):
         Ys = self.data["Y_s"]
         if self.rank == 0:
             if os.path.exists(path) == False:
                 os.makedirs(path)
-            elif os.path.exists(path+file_name):
-                os.remove(path+file_name)
+            elif os.path.exists(f'{path}/{file_name}.lammpstrj') and replace:
+                print(f"Dump file {path}/{file_name}.lammpstrj exists, replacing...")
+                os.remove(f'{path}/{file_name}.lammpstrj')
 
         for i in range(len(Ys)):
             self.pass_ext_variable_info(Ys[i])
-            s1 = 'write_dump all custom '
-            s2 = f' id type x y z xu yu zu ix iy iz modify append yes'
-            self.lmp.command(s1+path+file_name+s2)
+            self.lmp.command('run 0')
+            self.lmp.command(f'write_dump all custom {path}/{file_name}.lammpstrj id type x y z ix iy iz fx fy fz modify append yes')
             
             
     def compute_energies(self):
@@ -498,4 +519,49 @@ class atom_cont_system_remappable:
             E += [self.lmp.get_thermo("pe")]
         self.data["energies"] = E
 
+    def clear_checkpoint(self, path=None):
+        if self.rank == 0:
+            if os.path.exists(path):
+                print(f"Checkpoint directory {path} exists, clearing checkpoints...")
+                #delete all files starting with checkpoint
+                for f in os.listdir(path):
+                    if f.startswith('checkpoint'):
+                        os.remove(os.path.join(path, f))
+
+    def write_checkpoint(self, path='./checkpoints', data_points=None):
+        if self.rank == 0:
+            if not os.path.exists(path):
+                os.makedirs(path)
+            #save self.U0 and self.μ0
+            np.savetxt(f'{path}/checkpoint_U0.txt',self.U_0)
+            np.savetxt(f'{path}/checkpoint_μ0.txt',np.array([self.μ_0]))
+            #save all the Ys
+            Ys = np.array(self.data["Y_s"])
+            if data_points is None:
+                data_points = len(self.data["Y_s"])
+
+            with open(f'{path}/checkpoint_Ys.txt', 'ab') as f:
+                np.savetxt(f, Ys[-data_points:], fmt='%f', delimiter=' ', newline='\n', header='', footer='', comments='# ', encoding=None)
+            #accumulate checkpoint metadata
+            simulation_step = len(Ys)
+            if len(self.data["ds_s"])>0:
+                np.savetxt(f'{path}/checkpoint_metadata.txt',np.array([simulation_step, self.data['ds_s'][-1]]), header='simulation_step, ds')
+            else:
+                np.savetxt(f'{path}/checkpoint_metadata.txt',np.array([simulation_step, 0.0]), header='simulation_step, ds')
+
+
+    def read_checkpoint(self, path):
+        #read self.U0 and self.μ0
+        U_0 = np.loadtxt(f'{path}/checkpoint_U0.txt')
+        μ_0 = np.loadtxt(f'{path}/checkpoint_μ0.txt')
+        self.set_u0_and_μ0(U_0, μ_0)
+        #read all the Ys
+        Ys = np.loadtxt(f'{path}/checkpoint_Ys.txt')
+        Ys = list(Ys)
+        self.data["Y_s"] = Ys
+        #read checkpoint metadata
+        metadata = np.loadtxt(f'{path}/checkpoint_metadata.txt')
+        self.simulation_step = metadata[0]
+        if metadata[1] != 0.0:
+            self.overrule_ds = metadata[1]
 
