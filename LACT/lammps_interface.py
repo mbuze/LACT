@@ -442,13 +442,24 @@ class atom_cont_system_remappable:
                      exit_on_turn=False,
                      checkpoint_freq=5,
                      checkpoint_path='./checkpoints',
-                     min_steps=0
+                     min_steps=0,
+                     exit_cont_threshold=None,
                     ):
         if self.rank == 0:
             print('''
             %%%%%%%%%%%%%%%%%%%%%%%%%%%
             A continuation run: solve extended system to find points on the solution path.
             ''')
+
+        if exit_cont_threshold is not None:
+            # get cont param at start
+            init_cont_param = self.data["Y_s"][-1][-1]
+            # get difference between init and threshold
+            if init_cont_param == exit_cont_threshold:
+                print("Initial continuation parameter is equal to exit threshold, aborting...")
+                return
+            diff_sign = np.sign(init_cont_param - exit_cont_threshold)
+
         self.clear_checkpoint(checkpoint_path)
         counter = 0
         accepted_steps = 0
@@ -458,6 +469,12 @@ class atom_cont_system_remappable:
         else:
             ds = ds_default
         for k in range(self.initial_step, n_iter):
+            if exit_cont_threshold is not None:
+                if np.sign(self.data["Y_s"][-1][-1] - exit_cont_threshold) != diff_sign:
+                    if self.rank == 0:
+                        print("Continuation parameter has reached exit threshold, aborting...")
+                    break
+
             if checkpoint_freq > 0 and len(self.data['Y_s']) % checkpoint_freq == 0:
                 self.write_checkpoint(checkpoint_path, checkpoint_freq)
             Y_1 = self.continuation_step(ds,verbose=verbose,maxiter=maxiter)
