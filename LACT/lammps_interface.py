@@ -2,6 +2,7 @@ import numpy as np
 
 from lammps import lammps, LMP_STYLE_ATOM, LMP_TYPE_VECTOR, LMP_TYPE_ARRAY
 from ctypes import c_double, c_int
+import warnings
 
 import scipy
 from scipy import optimize
@@ -127,7 +128,7 @@ class atom_cont_system:
         X += Y[:-1].reshape(self.natoms,3)
         self.update_lammps_positions(X, image_arr)
         
-    def quasi_static_run(self,μ_start,increment,n_iter,verbose=False,reset_u0=True):
+    def quasi_static_run(self,μ_start,increment,n_iter,verbose=False,reset_u0=True,ftol=1e-8):
         if self.rank == 0:
             print('''
             %%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -154,10 +155,11 @@ class atom_cont_system:
                 self.add_correction_to_positions(self.data["Y_s"][-1])
             
             #print("minimizing....")
+            # self.lmp.command("dump mindumpy all custom 10 min_dump.lammpstrj id type x y z ix iy iz fx fy fz")
             self.lmp.command('thermo 1')
             self.lmp.command('run 0')
             self.lmp.command('min_style cg')
-            self.lmp.command('minimize 0 1e-8 5000 5000')
+            self.lmp.command(f'minimize 0 {ftol} 5000 5000')
             #print("minimize done")
             if k == 0 and reset_u0:
                 self.lmp.command('set group all image 0 0 0')
@@ -190,7 +192,7 @@ class atom_cont_system:
         self.lmp.commands_string(self.change_cont_param(Y[-1]))
         self.add_correction_to_positions(Y)
     
-    def get_gradient_wrt_cont_param(self, verbose=False):
+    def get_gradient_wrt_cont_param(self,idx=-1,verbose=False):
         """If we know the bond changes that the continuation event is meant to be exploring,
         we compute the gradient of the bond length with respect to the continuation parameter."""
         if self.bond_changes is None:
@@ -200,24 +202,43 @@ class atom_cont_system:
         if np.ndim(self.bond_changes) == 1:
             self.bond_changes = [self.bond_changes]
 
+        bonds_on_saddle = []
+        grads = []
         for bond_change in self.bond_changes:
             atom_1 = int(bond_change[0])
             atom_2 = int(bond_change[1])
             u0 = self.U_0
             Ys = self.data["Y_s"]
-            d_eps = Ys[-1][-1] - Ys[-2][-1]
-            Y_reshaped_1 = Ys[-1][:-1].reshape(self.natoms,3)
-            Y_reshaped_2 = Ys[-2][:-1].reshape(self.natoms,3)
+            d_eps = Ys[idx][-1] - Ys[idx-1][-1]
+            Y_reshaped_1 = Ys[idx][:-1].reshape(self.natoms,3)
+            Y_reshaped_2 = Ys[idx-1][:-1].reshape(self.natoms,3)
 
-            diff_1 = np.linalg.norm((u0[atom_2] + Y_reshaped_2[atom_2]) - (u0[atom_1] + Y_reshaped_2[atom_1]))
-            diff_2 = np.linalg.norm((u0[atom_2] + Y_reshaped_1[atom_2]) - (u0[atom_1] + Y_reshaped_1[atom_1]))
-            d_diff = diff_2 - diff_1
+            x1_1 = u0[atom_1] + Y_reshaped_1[atom_1]
+            x2_1 = u0[atom_2] + Y_reshaped_1[atom_2]
+            x1_2 = u0[atom_1] + Y_reshaped_2[atom_1]
+            x2_2 = u0[atom_2] + Y_reshaped_2[atom_2]
+            vector_1 = correct_pbc_vector(self, x1_1, x2_1, np.zeros(self.natoms), np.zeros(self.natoms))
+            vector_2 = correct_pbc_vector(self, x1_2, x2_2, np.zeros(self.natoms), np.zeros(self.natoms))
+            diff_1 = np.linalg.norm(vector_1)
+            diff_2 = np.linalg.norm(vector_2)
+            d_diff = diff_1 - diff_2
             
             grad = d_diff / d_eps
-            if self.rank == 0:
+            grads.append(grad)
+            if self.rank == 0 and verbose:
                 print("d_diff for atom pair", atom_1, atom_2, "is", d_diff)
                 print("grad d_bond_length/deps for atom pair", atom_1, atom_2, "is", grad)
-
+            if ((d_diff > 0.0) and (int(bond_change[3]) == 0)) and (grad < 0.0):
+                bonds_on_saddle.append([atom_1, atom_2])
+            elif ((d_diff < 0.0) and (int(bond_change[3]) == 1)) and (grad > 0.0):
+                bonds_on_saddle.append([atom_1, atom_2])
+        
+        if self.rank == 0:
+            if len(bonds_on_saddle) > 0:
+                print(f"On saddle!")
+            else:
+                print(f"Not on saddle!")
+        return grads
     
     def extended_system(self,Y,ds,Ydot):
         self.pass_ext_variable_info(Y)
@@ -271,23 +292,23 @@ class atom_cont_system:
             if self.rank != 0:
                 verbose = False
         Ys = self.data["Y_s"]
-        if higher_order_predictor:
-            assert len(Ys) > 3
-            s0 = 0.0
-            s1 = np.linalg.norm(Ys[-2] - Ys[-3])
-            s2 = s1 + np.linalg.norm(Ys[-1] - Ys[-2])
-            s_vals = [s0, s1, s2]
-            s_target = s2 + ds
-            L = [self.lagrange_basis(s_target, s_vals, i) for i in range(3)]
-            dL = [self.lagrange_basis_derivative(s_target, s_vals, i) for i in range(3)]
-            Y_0 = sum(L[i] * Ys[-3+i] for i in range(3))
-            Ydot = sum(dL[i] * Ys[-3+i] for i in range(3))
-            Ydot = Ydot / np.linalg.norm(Ydot)  # Normalize for arclength constraint
-        else:
-            assert len(Ys) > 1
-            Ydot = Ys[-1] - Ys[-2]
-            Ydot = Ydot / np.linalg.norm(Ydot)
-            Y_0 = Ys[-1] + ds*Ydot
+        # if higher_order_predictor:
+        #     assert len(Ys) > 3
+        #     s0 = 0.0
+        #     s1 = np.linalg.norm(Ys[-2] - Ys[-3])
+        #     s2 = s1 + np.linalg.norm(Ys[-1] - Ys[-2])
+        #     s_vals = [s0, s1, s2]
+        #     s_target = s2 + ds
+        #     L = [self.lagrange_basis(s_target, s_vals, i) for i in range(3)]
+        #     dL = [self.lagrange_basis_derivative(s_target, s_vals, i) for i in range(3)]
+        #     Y_0 = sum(L[i] * Ys[-3+i] for i in range(3))
+        #     Ydot = sum(dL[i] * Ys[-3+i] for i in range(3))
+        #     Ydot = Ydot / np.linalg.norm(Ydot)  # Normalize for arclength constraint
+        # else:
+            # assert len(Ys) > 1
+        Ydot = Ys[-1] - Ys[-2]
+        Ydot = Ydot / np.linalg.norm(Ydot)
+        Y_0 = Ys[-1] + ds*Ydot
         
         self.pass_ext_variable_info(Ys[-1])
         Y_1 = scipy.optimize.root(self.extended_system, Y_0,
@@ -328,23 +349,23 @@ class atom_cont_system:
                      checkpoint_freq=5,
                      checkpoint_path='./checkpoints',
                      min_steps=0,
-                     exit_cont_threshold=None,
                      fatol=1e-5,
+                     cont_target=None,
+                     target_tol=1e-5,
                     ):
         if self.rank == 0:
             print('''
             %%%%%%%%%%%%%%%%%%%%%%%%%%%
             A continuation run: solve extended system to find points on the solution path.
             ''')
+        self.converge_to_target = False
+        self.cont_target = cont_target
         higher_order_predictor=False
-        if exit_cont_threshold is not None:
+        if cont_target is not None:
             # get cont param at start
             init_cont_param = self.data["Y_s"][-1][-1]
             # get difference between init and threshold
-            if init_cont_param == exit_cont_threshold:
-                print("Initial continuation parameter is equal to exit threshold, aborting...")
-                return
-            diff_sign = np.sign(init_cont_param - exit_cont_threshold)
+            diff_sign = np.sign(init_cont_param - cont_target)
 
         if checkpoint_freq > 0:
             self.clear_checkpoint(checkpoint_path)
@@ -361,14 +382,38 @@ class atom_cont_system:
         else:
             ds = ds_default
         for k in range(self.initial_step, n_iter):
-            if exit_cont_threshold is not None:
-                if np.sign(self.data["Y_s"][-1][-1] - exit_cont_threshold) != diff_sign:
-                    if self.rank == 0:
-                        print("Continuation parameter has reached exit threshold, aborting...")
-                    break
-
+            if cont_target is not None:
+                if (np.sign(self.data["Y_s"][-1][-1] - cont_target) != diff_sign) or self.converge_to_target:
+                    # passed target - check to see if within tolerance of target
+                    if np.abs(self.data["Y_s"][-1][-1] - cont_target) < target_tol:
+                        if self.rank == 0:
+                            print(f"Reached target continuation parameter {cont_target} within tolerance {target_tol}. Stopping continuation.")
+                        break
+                    else:
+                        # we have passed the target, turn converge_to_target on and flip diff_sign
+                        if self.rank == 0:
+                            print(f"Passed target continuation parameter {cont_target}, now attempting to converge to it.")
+                        self.converge_to_target = True
+                        
             if checkpoint_freq > 0 and len(self.data['Y_s']) % checkpoint_freq == 0:
                 self.write_checkpoint(checkpoint_path, checkpoint_freq)
+            
+            # if converge to target is on, then we need to adjust ds based on Ydot
+            if self.converge_to_target:
+                Ys = self.data["Y_s"]
+                Ydot = Ys[-1] - Ys[-2]
+                Ydot = Ydot / np.linalg.norm(Ydot)
+                mu_diff = self.cont_target - Ys[-1][-1]
+                ds_target = mu_diff/Ydot[-1]
+                if np.abs(ds_target) < ds:
+                    ds = ds_target
+                else:
+                    if np.sign(ds_target) != np.sign(ds):
+                        # we have passed the target, so we need to flip the sign of ds
+                        ds = -ds
+                if self.rank == 0:
+                    print(f"Adjusting ds to {ds}.")
+
             Y_1 = self.continuation_step(ds,verbose=verbose,maxiter=maxiter,fatol=fatol,higher_order_predictor=higher_order_predictor)
             if Y_1.success == False:
                 ds = ds/2
@@ -686,3 +731,44 @@ class atom_cont_system_legacy:
             self.lmp.command('run 0')
             E += [self.lmp.get_thermo("pe")]
         self.data["energies"] = E
+
+def correct_pbc_vector(system, x1, x2, image_arr1, image_arr2):
+    """Get the vector between x1 and x2 corrected for PBC"""
+    x1, x2 = np.array(x1), np.array(x2)
+    cell = system.lmp.extract_box()
+    boxlo = cell[0]
+    boxhi = cell[1]
+    xy = cell[2]
+    yz = cell[3]
+    xz = cell[4]
+    a_vec = np.array([boxhi[0] - boxlo[0], 0, 0])
+    b_vec = np.array([xy, boxhi[1] - boxlo[1], 0])
+    c_vec = np.array([xz, yz, boxhi[2] - boxlo[2]])
+
+    def unwrap(x, image):
+        return x - image[0]*a_vec - image[1]*b_vec - image[2]*c_vec
+
+    x1_unwrapped = unwrap(x1, image_arr1)
+    x2_unwrapped = unwrap(x2, image_arr2)
+    vector = x2_unwrapped - x1_unwrapped
+
+    if np.linalg.norm(vector) > 15:
+        images = [i*a_vec + j*b_vec + k*c_vec
+                for i in [-1, 0, 1]
+                for j in [-1, 0, 1]
+                for k in [-1, 0, 1]]
+        vectors = [x2_unwrapped + img - x1_unwrapped for img in images]
+        norms = [np.linalg.norm(v) for v in vectors]
+
+        min_idx = int(np.argmin(norms))
+        if norms[min_idx] < 15:
+            vector = vectors[min_idx]
+        else:
+            if system.rank == 0:
+                warnings.warn("Bond atoms very far apart (> 15 Å), PBC adjustment ambiguous")
+                print(f"Original vector was {vector}")
+                print(f"Min vector is {vectors[min_idx]}, norm = {norms[min_idx]}")
+                print("Assuming correct adjusted vector is min vector.")
+            vector = vectors[min_idx]
+
+    return vector
