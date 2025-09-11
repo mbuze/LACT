@@ -267,45 +267,13 @@ class atom_cont_system:
         #     print("pos of largest G is ",np.argmax(np.abs(G)))
         # self.lmp.command('write_dump all custom test_cont_dump.lammpstrj id type x y z ix iy iz fx fy fz modify append yes')
         return G
-    
-    def lagrange_basis(self,s_eval, s_vals, i):
-        j, k = [x for x in range(3) if x != i]
-        return ((s_eval - s_vals[j]) * (s_eval - s_vals[k])) / ((s_vals[i] - s_vals[j]) * (s_vals[i] - s_vals[k]))
-    
 
-    def lagrange_basis_derivative(self, s_eval, s_vals, i):
-        # Derivative of Lagrange basis function L_i at s_eval
-        L_prime = 0.0
-        for j in range(len(s_vals)):
-            if j == i:
-                continue
-            prod = 1.0
-            for k in range(len(s_vals)):
-                if k == i or k == j:
-                    continue
-                prod *= (s_eval - s_vals[k]) / (s_vals[i] - s_vals[k])
-            L_prime += prod / (s_vals[i] - s_vals[j])
-        return L_prime
 
-    def continuation_step(self,ds,verbose = False,maxiter=6,fatol=1e-5,higher_order_predictor=False):
+    def continuation_step(self,ds,verbose = False,maxiter=6,fatol=1e-5):
         if verbose:
             if self.rank != 0:
                 verbose = False
         Ys = self.data["Y_s"]
-        # if higher_order_predictor:
-        #     assert len(Ys) > 3
-        #     s0 = 0.0
-        #     s1 = np.linalg.norm(Ys[-2] - Ys[-3])
-        #     s2 = s1 + np.linalg.norm(Ys[-1] - Ys[-2])
-        #     s_vals = [s0, s1, s2]
-        #     s_target = s2 + ds
-        #     L = [self.lagrange_basis(s_target, s_vals, i) for i in range(3)]
-        #     dL = [self.lagrange_basis_derivative(s_target, s_vals, i) for i in range(3)]
-        #     Y_0 = sum(L[i] * Ys[-3+i] for i in range(3))
-        #     Ydot = sum(dL[i] * Ys[-3+i] for i in range(3))
-        #     Ydot = Ydot / np.linalg.norm(Ydot)  # Normalize for arclength constraint
-        # else:
-            # assert len(Ys) > 1
         Ydot = Ys[-1] - Ys[-2]
         Ydot = Ydot / np.linalg.norm(Ydot)
         Y_0 = Ys[-1] + ds*Ydot
@@ -322,20 +290,6 @@ class atom_cont_system:
                                                 'method': 'lgmres'}},
                        callback=None)
 
-        # Post-solve projection to enforce pseudo-arclength constraint
-        # maybe helps stop tangent drift due to numerical noise at small ds?
-        if Y_1.success:
-            Y_sol = Y_1.x
-            Y0 = Ys[-1]
-            delta = Y_sol - Y0
-            residual = np.dot(delta, Ydot) - ds # at inf tol this would be 0.0
-            if self.rank == 0:
-                print("arclength residual:", residual)
-            correction = residual * Ydot
-            Y_proj = Y_sol - correction
-
-            # Replace solution with projected value
-            Y_1.x = Y_proj
         return Y_1
             
         
@@ -360,7 +314,6 @@ class atom_cont_system:
             ''')
         self.converge_to_target = False
         self.cont_target = cont_target
-        higher_order_predictor=False
         if cont_target is not None:
             # get cont param at start
             init_cont_param = self.data["Y_s"][-1][-1]
@@ -376,9 +329,6 @@ class atom_cont_system:
             if self.rank == 0:
                 print('Overruling initial ds from checkpoint')
             ds = self.overrule_ds
-            if self.rank == 0:
-                print('Switching to higher order predictor for checkpoint restart')
-            higher_order_predictor=True
         else:
             ds = ds_default
         for k in range(self.initial_step, n_iter):
@@ -414,15 +364,12 @@ class atom_cont_system:
                 if self.rank == 0:
                     print(f"Adjusting ds to {ds}.")
 
-            Y_1 = self.continuation_step(ds,verbose=verbose,maxiter=maxiter,fatol=fatol,higher_order_predictor=higher_order_predictor)
+            Y_1 = self.continuation_step(ds,verbose=verbose,maxiter=maxiter,fatol=fatol)
             if Y_1.success == False:
                 ds = ds/2
                 if ds > ds_smallest:
                     if self.rank == 0:
                         print("ds halved, now equal to ", ds, ". We go 2 steps back.")
-                        if not higher_order_predictor:
-                            print("Switching to higher order predictor!")
-                    higher_order_predictor=True
                 else:
                     if self.rank == 0:
                         print("ds now below the threshold, equal to ", ds, ".  Aborting...")
@@ -443,9 +390,6 @@ class atom_cont_system:
                     ds = 2*ds
                     if self.rank == 0:
                         print("ds doubled, now equal to ", ds, ".")
-                        if higher_order_predictor:
-                            print("Switching off higher order predictor!") 
-                    higher_order_predictor=False
                     counter = 0
                 
                 accepted_steps += 1
