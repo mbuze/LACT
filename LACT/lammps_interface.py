@@ -2,7 +2,7 @@ import numpy as np
 
 from lammps import lammps, LMP_STYLE_ATOM, LMP_TYPE_VECTOR, LMP_TYPE_ARRAY
 from ctypes import c_double, c_int
-
+# stupid change
 import scipy
 from scipy import optimize
 
