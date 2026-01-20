@@ -207,20 +207,14 @@ class atom_cont_system:
         if len(self.data["Y_s"]) > 0:
             if self.rank == 0:
                 print("Warning: System contains some data already!")
-        print(f"{self.rank}:here0, niter {n_iter}, reset u0, {reset_u0}")
         for k in range(n_iter):
-            print(f"{self.rank}:hereio!!")
             if k>0 or not reset_u0:
-                print(f"{self.rank}:hereio!!2")
-                #print("here1")
                 #reset structure to initial state
                 self.reset_atoms_and_μ()
             # increment continuation parameter
             μ = μ_start + k*increment
-            print(f"{self.rank}:here1")
             # handle the on saddle case
             if on_saddle:
-                print(f"{self.rank}:here2")
                 # minimize using modified forces and ode12r
                 maxiter = 1000
                 _Y, conv = self.minimize_to_saddle(μ,maxiter,ftol=ftol)
@@ -234,25 +228,20 @@ class atom_cont_system:
 
             # if not on saddle, normal minimisation
             cmd = self.change_cont_param(μ)
-            # if self.rank == 0:
-            #     print(cmd)
             self.lmp.commands_string(cmd)
             self.lmp.command('run 0')
             if k>0 or not reset_u0:
                 # get positions after continuation shift
                 _X_mu_only, image_arr = self.get_positions_from_lammps()
-                #print("here2")
                 # add previous minimisation to atom positions
                 self.add_correction_to_positions(self.data["Y_s"][-1])
             
-            #print("minimizing....")
             # self.lmp.command("dump mindumpy all custom 10 min_dump.lammpstrj id type x y z ix iy iz fx fy fz")
             self.lmp.command('thermo 1')
             self.lmp.command('run 0')
             self.lmp.command('min_style cg')
             self.lmp.command(f'minimize 0 {ftol} 5000 5000')
             # self.lmp.command("undump mindumpy")
-            # print("minimize done")
             if k == 0 and reset_u0:
                 self.lmp.command('set group all image 0 0 0')
             _X, image_arr = self.get_positions_from_lammps()
@@ -274,9 +263,7 @@ class atom_cont_system:
                 if self.rank == 0:
                     print("Iteration step: ",k+1," ",", Solution step: ",len(Ys)," ",", Continuation parameter: ", Ys[-1][-1])
                     print("--------------------------------------------------")
-                    # dump data
             
-                #self.lmp.command(f'write_dump all custom dump.lammpstrj id type x y z ix iy iz modify append yes')
                 
     
     def get_smallest_eigen(self,Yin,v0=None):
@@ -377,15 +364,7 @@ class atom_cont_system:
         Y0 = Ys[-1]
         YminusY0 = Y-Y0
         last_eqn = (YminusY0*Ydot).sum() - ds
-        # if self.rank == 0:
-        #     print('last eq value is ',last_eqn)
         G = np.append(G,last_eqn)
-
-        # if self.rank == 0:
-        #     print("Max of G is ",np.max(np.abs(G)))
-        #     #print("full G is", list(G))
-        #     print("pos of largest G is ",np.argmax(np.abs(G)))
-        # self.lmp.command('write_dump all custom test_cont_dump.lammpstrj id type x y z ix iy iz fx fy fz modify append yes')
         return G
 
 
