@@ -5,3 +5,7 @@ LACT.egg-info/
 **/__pycache__/
 
 *.lammps
+
+scripts/
+
+notebooks/not_to_be_uploaded/
