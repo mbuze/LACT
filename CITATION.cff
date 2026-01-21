@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+title: "LACT (LAMMPS Continuation Techniques)"
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+authors:
+  - family-names: Buze
+    given-names: Maciej
+  - family-names: Birks
+    given-names: Fraser
+repository-code: "https://github.com/mbuze/LACT"
