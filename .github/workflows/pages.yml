@@ -1,0 +1,78 @@
+name: Deploy examples to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: lact
+          create-args: >-
+            python=3.11
+            lammps
+            numpy scipy matplotlib matscipy ase plotly marimo
+          channels: conda-forge
+          cache-environment: true
+
+      - name: Install LACT
+        shell: micromamba-shell {0}
+        run: pip install .
+
+      - name: Pre-compute notebook data
+        shell: micromamba-shell {0}
+        run: python examples/precompute.py
+
+      - name: Export notebooks to static HTML
+        shell: micromamba-shell {0}
+        run: |
+          mkdir -p _site
+          for nb in examples/demo*.py; do
+            name=$(basename "$nb" .py)
+            echo "Exporting $nb (static) ..."
+            marimo export html "$nb" -o "_site/${name}.html"
+          done
+
+      - name: Export notebooks to interactive WASM HTML
+        shell: micromamba-shell {0}
+        run: |
+          for nb in examples/demo*.py; do
+            name=$(basename "$nb" .py)
+            echo "Exporting $nb (WASM) ..."
+            marimo export html-wasm "$nb" -o "_site/${name}.wasm.html" --mode run --no-show-code
+          done
+
+      - name: Copy data files for WASM notebooks
+        run: cp -r examples/data _site/data
+
+      - name: Generate index page
+        run: cp docs/index.html _site/index.html
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

@@ -8,4 +8,7 @@ LACT.egg-info/
 
 scripts/
 
+examples/data/
+
 notebooks/not_to_be_uploaded/
+CLAUDE.md

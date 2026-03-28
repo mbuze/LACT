@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: lact
+          create-args: >-
+            python=3.11
+            lammps
+            numpy scipy matplotlib matscipy ase mpi4py openmpi
+          channels: conda-forge
+          cache-environment: true
+
+      - name: Install LACT
+        shell: micromamba-shell {0}
+        run: pip install .
+
+      - name: Run tests (serial + parallel)
+        shell: micromamba-shell {0}
+        working-directory: tests
+        run: mpirun --oversubscribe -np 2 python test_parallel.py
