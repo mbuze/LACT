@@ -46,21 +46,24 @@ def _():
     import matplotlib.pyplot as plt
     try:
         from LACT.precomputed import PrecomputedSystem
+        load_json = None
     except ImportError:
-        import sys as _sys, io as _io
+        import json as _json
+
+        async def load_json(url):
+            from pyodide.http import pyfetch
+            from js import self as _js_self
+            base = str(_js_self.location.href).rsplit("/", 2)[0] + "/"
+            resp = await pyfetch(base + url)
+            return _json.loads(await resp.string())
 
         class PrecomputedSystem:
-            def __init__(self, path_or_url):
-                if "pyodide" in _sys.modules:
-                    from pyodide.http import open_url
-                    _d = np.load(_io.BytesIO(open_url(path_or_url).read()), allow_pickle=False)
-                else:
-                    _d = np.load(path_or_url, allow_pickle=False)
-                self.natoms = int(_d["natoms"])
-                self.U_0 = _d["U_0"]
-                self.data = {"Y_s": list(_d["Y_s"]), "ds_s": list(_d["ds_s"]) if "ds_s" in _d else []}
-                if "energies" in _d:
-                    self.data["energies"] = list(_d["energies"])
+            def __init__(self, d):
+                self.natoms = int(d["natoms"])
+                self.U_0 = np.asarray(d["U_0"])
+                self.data = {"Y_s": [np.asarray(y) for y in d["Y_s"]], "ds_s": list(d.get("ds_s", []))}
+                if "energies" in d:
+                    self.data["energies"] = list(d["energies"])
 
     try:
         from lammps import lammps
@@ -71,7 +74,7 @@ def _():
         atom_cont_system = None
         HAVE_LAMMPS = False
 
-    return HAVE_LAMMPS, PrecomputedSystem, atom_cont_system, lammps, mo, np, plt
+    return HAVE_LAMMPS, PrecomputedSystem, atom_cont_system, lammps, load_json, mo, np, plt
 
 
 @app.cell(hide_code=True)
@@ -239,14 +242,14 @@ def _(mo):
 
 
 @app.cell
-def _(HAVE_LAMMPS, PrecomputedSystem, K, make_crystal, strain_max):
+async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, K, make_crystal, strain_max):
     if HAVE_LAMMPS:
         sys, sys_lmp = make_crystal()
         increment = strain_max / K
         sys.quasi_static_run(0.0, increment, K + 1, verbose=False)
         sys.compute_energies()
     else:
-        sys = PrecomputedSystem("data/demo3_qs.npz")
+        sys = PrecomputedSystem(await load_json("data/demo3_qs.json"))
     qs_Ys = sys.data["Y_s"]
     return qs_Ys, sys
 
@@ -290,7 +293,7 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(HAVE_LAMMPS, PrecomputedSystem, make_crystal, qs_Ys):
+async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, make_crystal, qs_Ys):
     if HAVE_LAMMPS:
         sys_a = seed_continuation(make_crystal, qs_Ys, -6, reverse=True)
         sys_a.continuation_run(
@@ -307,7 +310,7 @@ def _(HAVE_LAMMPS, PrecomputedSystem, make_crystal, qs_Ys):
         sys_a.data["Y_s"] = sys_a.data["Y_s"][:-2]
         sys_a.compute_energies()
     else:
-        sys_a = PrecomputedSystem("data/demo3_cont_a.npz")
+        sys_a = PrecomputedSystem(await load_json("data/demo3_cont_a.json"))
     return (sys_a,)
 
 
@@ -320,7 +323,7 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(HAVE_LAMMPS, PrecomputedSystem, make_crystal, qs_Ys):
+async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, make_crystal, qs_Ys):
     if HAVE_LAMMPS:
         sys_b = seed_continuation(make_crystal, qs_Ys, 750, reverse=False)
         sys_b.continuation_run(
@@ -335,7 +338,7 @@ def _(HAVE_LAMMPS, PrecomputedSystem, make_crystal, qs_Ys):
         )
         sys_b.compute_energies()
     else:
-        sys_b = PrecomputedSystem("data/demo3_cont_b.npz")
+        sys_b = PrecomputedSystem(await load_json("data/demo3_cont_b.json"))
     return (sys_b,)
 
 

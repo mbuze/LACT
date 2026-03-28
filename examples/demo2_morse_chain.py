@@ -38,21 +38,24 @@ def _():
     import matplotlib.pyplot as plt
     try:
         from LACT.precomputed import PrecomputedSystem
+        load_json = None
     except ImportError:
-        import sys as _sys, io as _io
+        import json as _json
+
+        async def load_json(url):
+            from pyodide.http import pyfetch
+            from js import self as _js_self
+            base = str(_js_self.location.href).rsplit("/", 2)[0] + "/"
+            resp = await pyfetch(base + url)
+            return _json.loads(await resp.string())
 
         class PrecomputedSystem:
-            def __init__(self, path_or_url):
-                if "pyodide" in _sys.modules:
-                    from pyodide.http import open_url
-                    _d = np.load(_io.BytesIO(open_url(path_or_url).read()), allow_pickle=False)
-                else:
-                    _d = np.load(path_or_url, allow_pickle=False)
-                self.natoms = int(_d["natoms"])
-                self.U_0 = _d["U_0"]
-                self.data = {"Y_s": list(_d["Y_s"]), "ds_s": list(_d["ds_s"]) if "ds_s" in _d else []}
-                if "energies" in _d:
-                    self.data["energies"] = list(_d["energies"])
+            def __init__(self, d):
+                self.natoms = int(d["natoms"])
+                self.U_0 = np.asarray(d["U_0"])
+                self.data = {"Y_s": [np.asarray(y) for y in d["Y_s"]], "ds_s": list(d.get("ds_s", []))}
+                if "energies" in d:
+                    self.data["energies"] = list(d["energies"])
 
     try:
         from lammps import lammps
@@ -63,7 +66,7 @@ def _():
         atom_cont_system = None
         HAVE_LAMMPS = False
 
-    return HAVE_LAMMPS, PrecomputedSystem, atom_cont_system, lammps, mo, np, plt
+    return HAVE_LAMMPS, PrecomputedSystem, atom_cont_system, lammps, load_json, mo, np, plt
 
 
 @app.cell
@@ -168,7 +171,7 @@ def _(mo):
 
 
 @app.cell
-def _(HAVE_LAMMPS, PrecomputedSystem, get_chain_data, make_chain):
+async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, get_chain_data, make_chain):
     if HAVE_LAMMPS:
         qs_sys = make_chain()
         try:
@@ -177,7 +180,7 @@ def _(HAVE_LAMMPS, PrecomputedSystem, get_chain_data, make_chain):
             print("fail")
             pass  # LAMMPS crashes past the fold — keep the points we got
     else:
-        qs_sys = PrecomputedSystem("data/demo2_qs.npz")
+        qs_sys = PrecomputedSystem(await load_json("data/demo2_qs.json"))
     qs_extensions, qs_forces, qs_bonds = get_chain_data(qs_sys)
     return qs_bonds, qs_extensions, qs_forces, qs_sys
 
@@ -195,7 +198,7 @@ def _(mo):
 
 
 @app.cell
-def _(HAVE_LAMMPS, PrecomputedSystem, get_chain_data, make_chain):
+async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, get_chain_data, make_chain):
     if HAVE_LAMMPS:
         cont_sys = make_chain()
         cont_sys.quasi_static_run(0.0, 0.5, 5, verbose=False)
@@ -212,7 +215,7 @@ def _(HAVE_LAMMPS, PrecomputedSystem, get_chain_data, make_chain):
             target_tol=0.1,
         )
     else:
-        cont_sys = PrecomputedSystem("data/demo2_cont.npz")
+        cont_sys = PrecomputedSystem(await load_json("data/demo2_cont.json"))
         n_qs = 5
 
     cont_extensions, cont_forces, cont_bonds = get_chain_data(cont_sys)
