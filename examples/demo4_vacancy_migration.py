@@ -46,21 +46,24 @@ def _():
     import plotly.graph_objects as go
     try:
         from LACT.precomputed import PrecomputedSystem
+        load_json = None
     except ImportError:
-        import sys as _sys, io as _io
+        import json as _json
+
+        async def load_json(url):
+            from pyodide.http import pyfetch
+            from js import self as _js_self
+            base = str(_js_self.location.href).rsplit("/", 2)[0] + "/"
+            resp = await pyfetch(base + url)
+            return _json.loads(await resp.string())
 
         class PrecomputedSystem:
-            def __init__(self, path_or_url):
-                if "pyodide" in _sys.modules:
-                    from pyodide.http import open_url
-                    _d = np.load(_io.BytesIO(open_url(path_or_url).read()), allow_pickle=False)
-                else:
-                    _d = np.load(path_or_url, allow_pickle=False)
-                self.natoms = int(_d["natoms"])
-                self.U_0 = _d["U_0"]
-                self.data = {"Y_s": list(_d["Y_s"]), "ds_s": list(_d["ds_s"]) if "ds_s" in _d else []}
-                if "energies" in _d:
-                    self.data["energies"] = list(_d["energies"])
+            def __init__(self, d):
+                self.natoms = int(d["natoms"])
+                self.U_0 = np.asarray(d["U_0"])
+                self.data = {"Y_s": [np.asarray(y) for y in d["Y_s"]], "ds_s": list(d.get("ds_s", []))}
+                if "energies" in d:
+                    self.data["energies"] = list(d["energies"])
 
     try:
         from lammps import lammps
@@ -71,7 +74,7 @@ def _():
         atom_cont_system = None
         HAVE_LAMMPS = False
 
-    return HAVE_LAMMPS, PrecomputedSystem, atom_cont_system, go, lammps, mo, np, plt
+    return HAVE_LAMMPS, PrecomputedSystem, atom_cont_system, go, lammps, load_json, mo, np, plt
 
 
 @app.cell
@@ -156,13 +159,13 @@ def _(mo):
 
 
 @app.cell
-def _(HAVE_LAMMPS, PrecomputedSystem, get_crystal_data, make_crystal, np):
+async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, get_crystal_data, make_crystal, np):
     if HAVE_LAMMPS:
         qs_sys, qs_lmp = make_crystal()
         qs_sys.quasi_static_run(1.0, 0.001, 200, verbose=False)
         qs_sys.compute_energies()
     else:
-        qs_sys = PrecomputedSystem("data/demo4_qs.npz")
+        qs_sys = PrecomputedSystem(await load_json("data/demo4_qs.json"))
     qs_mus, qs_disp_norms, qs_max_disps = get_crystal_data(qs_sys)
     qs_energies = np.array(qs_sys.data["energies"])
     return qs_disp_norms, qs_energies, qs_mus, qs_sys
@@ -230,7 +233,7 @@ def seed_continuation(make_crystal, qs_Ys, idx, reverse=False):
 
 
 @app.cell
-def _(HAVE_LAMMPS, PrecomputedSystem, make_crystal, qs_sys):
+async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, make_crystal, qs_sys):
     if HAVE_LAMMPS:
         # --- Continuation A: seed near first instability, forward ---
         # Adjust idx_a based on the QS energy plot
@@ -247,12 +250,12 @@ def _(HAVE_LAMMPS, PrecomputedSystem, make_crystal, qs_sys):
         )
         sys_a.compute_energies()
     else:
-        sys_a = PrecomputedSystem("data/demo4_cont_a.npz")
+        sys_a = PrecomputedSystem(await load_json("data/demo4_cont_a.json"))
     return (sys_a,)
 
 
 @app.cell
-def _(HAVE_LAMMPS, PrecomputedSystem, make_crystal, qs_sys):
+async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, make_crystal, qs_sys):
     if HAVE_LAMMPS:
         # --- Continuation B: seed near first instability, reverse ---
         # Adjust idx_b based on the QS energy plot
@@ -269,7 +272,7 @@ def _(HAVE_LAMMPS, PrecomputedSystem, make_crystal, qs_sys):
         )
         sys_b.compute_energies()
     else:
-        sys_b = PrecomputedSystem("data/demo4_cont_b.npz")
+        sys_b = PrecomputedSystem(await load_json("data/demo4_cont_b.json"))
     return (sys_b,)
 
 

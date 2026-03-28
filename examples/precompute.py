@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Pre-compute LAMMPS results for all demo notebooks and save as .npz files.
+"""Pre-compute LAMMPS results for all demo notebooks and save as .json files.
 
 Run this with a working LAMMPS installation:
 
@@ -66,7 +66,7 @@ def demo1():
     # Quasi-static
     qs_sys = make_dimer()
     qs_sys.quasi_static_run(0.0, 0.1, 30, verbose=False)
-    save_system(qs_sys, os.path.join(DATA_DIR, "demo1_qs.npz"))
+    save_system(qs_sys, os.path.join(DATA_DIR, "demo1_qs.json"))
     print(f"  qs: {len(qs_sys.data['Y_s'])} points")
 
     # Continuation
@@ -76,7 +76,7 @@ def demo1():
         n_iter=100, ds_default=0.01, ds_smallest=0.001, ds_largest=1.0,
         verbose=False, checkpoint_freq=0, cont_target=0.0, target_tol=0.05,
     )
-    save_system(cont_sys, os.path.join(DATA_DIR, "demo1_cont.npz"))
+    save_system(cont_sys, os.path.join(DATA_DIR, "demo1_cont.json"))
     print(f"  cont: {len(cont_sys.data['Y_s'])} points")
 
 
@@ -142,7 +142,7 @@ def demo2():
         qs_sys.quasi_static_run(0.0, 0.02, 200, verbose=False)
     except Exception:
         pass
-    save_system(qs_sys, os.path.join(DATA_DIR, "demo2_qs.npz"))
+    save_system(qs_sys, os.path.join(DATA_DIR, "demo2_qs.json"))
     print(f"  qs: {len(qs_sys.data['Y_s'])} points")
 
     # Continuation
@@ -152,7 +152,7 @@ def demo2():
         n_iter=200, ds_default=0.01, ds_smallest=0.001, ds_largest=0.05,
         verbose=False, checkpoint_freq=0, cont_target=0.5, target_tol=0.1,
     )
-    save_system(cont_sys, os.path.join(DATA_DIR, "demo2_cont.npz"))
+    save_system(cont_sys, os.path.join(DATA_DIR, "demo2_cont.json"))
     print(f"  cont: {len(cont_sys.data['Y_s'])} points")
 
 
@@ -214,7 +214,7 @@ def demo3():
     increment = strain_max / K
     sys.quasi_static_run(0.0, increment, K + 1, verbose=False)
     sys.compute_energies()
-    save_system(sys, os.path.join(DATA_DIR, "demo3_qs.npz"))
+    save_system(sys, os.path.join(DATA_DIR, "demo3_qs.json"))
     print(f"  qs: {len(sys.data['Y_s'])} points")
 
     qs_Ys = sys.data["Y_s"]
@@ -227,7 +227,7 @@ def demo3():
     )
     sys_a.data["Y_s"] = sys_a.data["Y_s"][:-2]
     sys_a.compute_energies()
-    save_system(sys_a, os.path.join(DATA_DIR, "demo3_cont_a.npz"))
+    save_system(sys_a, os.path.join(DATA_DIR, "demo3_cont_a.json"))
     print(f"  cont_a: {len(sys_a.data['Y_s'])} points")
 
     # Continuation B: seeded at idx 750, forward
@@ -237,7 +237,7 @@ def demo3():
         verbose=False, checkpoint_freq=0, cont_target=0.16, target_tol=0.005,
     )
     sys_b.compute_energies()
-    save_system(sys_b, os.path.join(DATA_DIR, "demo3_cont_b.npz"))
+    save_system(sys_b, os.path.join(DATA_DIR, "demo3_cont_b.json"))
     print(f"  cont_b: {len(sys_b.data['Y_s'])} points")
 
 
@@ -299,7 +299,7 @@ def demo4():
     qs_sys, qs_lmp = make_crystal()
     qs_sys.quasi_static_run(1.0, 0.001, 200, verbose=False)
     qs_sys.compute_energies()
-    save_system(qs_sys, os.path.join(DATA_DIR, "demo4_qs.npz"))
+    save_system(qs_sys, os.path.join(DATA_DIR, "demo4_qs.json"))
     print(f"  qs: {len(qs_sys.data['Y_s'])} points")
 
     qs_Ys = qs_sys.data["Y_s"]
@@ -311,7 +311,7 @@ def demo4():
         cont_target=0.95, verbose=False, checkpoint_freq=0,
     )
     sys_a.compute_energies()
-    save_system(sys_a, os.path.join(DATA_DIR, "demo4_cont_a.npz"))
+    save_system(sys_a, os.path.join(DATA_DIR, "demo4_cont_a.json"))
     print(f"  cont_a: {len(sys_a.data['Y_s'])} points")
 
     # Continuation B: reverse from idx 135
@@ -321,7 +321,7 @@ def demo4():
         cont_target=0.95, verbose=False, checkpoint_freq=0,
     )
     sys_b.compute_energies()
-    save_system(sys_b, os.path.join(DATA_DIR, "demo4_cont_b.npz"))
+    save_system(sys_b, os.path.join(DATA_DIR, "demo4_cont_b.json"))
     print(f"  cont_b: {len(sys_b.data['Y_s'])} points")
 
 
