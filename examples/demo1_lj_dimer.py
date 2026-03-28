@@ -39,55 +39,66 @@ def _():
     import marimo as mo
     import numpy as np
     import matplotlib.pyplot as plt
-    from lammps import lammps
-    from LACT import atom_cont_system
+    from LACT.precomputed import PrecomputedSystem
 
-    return atom_cont_system, lammps, mo, np, plt
+    try:
+        from lammps import lammps
+        from LACT import atom_cont_system
+        HAVE_LAMMPS = True
+    except ImportError:
+        lammps = None
+        atom_cont_system = None
+        HAVE_LAMMPS = False
+
+    return HAVE_LAMMPS, PrecomputedSystem, atom_cont_system, lammps, mo, np, plt
 
 
 @app.cell
-def _(atom_cont_system, lammps):
-    def make_dimer():
-        _lmp = lammps(cmdargs=["-screen", "none"])
-        _lmp.commands_string(
-            """
-            units         lj
-            dimension     3
-            boundary      f f f
-            atom_style    atomic
-            atom_modify   map yes
+def _(HAVE_LAMMPS, atom_cont_system, lammps):
+    if HAVE_LAMMPS:
+        def make_dimer():
+            _lmp = lammps(cmdargs=["-screen", "none"])
+            _lmp.commands_string(
+                """
+                units         lj
+                dimension     3
+                boundary      f f f
+                atom_style    atomic
+                atom_modify   map yes
 
-            region box block -50.0 50.0 -50.0 50.0 -50.0 50.0
-            create_box 1 box
-            mass 1 1.0
+                region box block -50.0 50.0 -50.0 50.0 -50.0 50.0
+                create_box 1 box
+                mass 1 1.0
 
-            create_atoms 1 single 0.0 0.0 0.0
-            create_atoms 1 single 1.12246 0.0 0.0
-            reset_atom_ids sort yes
+                create_atoms 1 single 0.0 0.0 0.0
+                create_atoms 1 single 1.12246 0.0 0.0
+                reset_atom_ids sort yes
 
-            pair_style lj/cut 3.0
-            pair_coeff 1 1 1.0 1.0 3.0
+                pair_style lj/cut 3.0
+                pair_coeff 1 1 1.0 1.0 3.0
 
-            group fixed id 1
-            group mobile id 2
-            fix freeze fixed setforce 0.0 0.0 0.0
+                group fixed id 1
+                group mobile id 2
+                fix freeze fixed setforce 0.0 0.0 0.0
 
-            fix pull mobile addforce 0.0 0.0 0.0
-            fix_modify pull energy yes
+                fix pull mobile addforce 0.0 0.0 0.0
+                fix_modify pull energy yes
 
-            compute forces all property/atom fx fy fz
-            compute ids all property/atom id
-            """
-        )
+                compute forces all property/atom fx fy fz
+                compute ids all property/atom id
+                """
+            )
 
-        def update_command(force):
-            return f"""
-            unfix pull
-            fix pull mobile addforce {force} 0.0 0.0
-            fix_modify pull energy yes
-            """
+            def update_command(force):
+                return f"""
+                unfix pull
+                fix pull mobile addforce {force} 0.0 0.0
+                fix_modify pull energy yes
+                """
 
-        return atom_cont_system(_lmp, update_command)
+            return atom_cont_system(_lmp, update_command)
+    else:
+        make_dimer = None
 
     return (make_dimer,)
 
@@ -124,9 +135,12 @@ def _(mo):
 
 
 @app.cell
-def _(get_separation, make_dimer):
-    qs_sys = make_dimer()
-    qs_sys.quasi_static_run(0.0, 0.1, 30, verbose=False)
+def _(HAVE_LAMMPS, PrecomputedSystem, get_separation, make_dimer):
+    if HAVE_LAMMPS:
+        qs_sys = make_dimer()
+        qs_sys.quasi_static_run(0.0, 0.1, 30, verbose=False)
+    else:
+        qs_sys = PrecomputedSystem("data/demo1_qs.npz")
     qs_seps, qs_forces = get_separation(qs_sys)
     return qs_forces, qs_seps, qs_sys
 
@@ -143,21 +157,25 @@ def _(mo):
 
 
 @app.cell
-def _(get_separation, make_dimer):
-    cont_sys = make_dimer()
-    cont_sys.quasi_static_run(0.0, 0.5, 5, verbose=False)
-    n_qs = len(cont_sys.data["Y_s"])
+def _(HAVE_LAMMPS, PrecomputedSystem, get_separation, make_dimer):
+    if HAVE_LAMMPS:
+        cont_sys = make_dimer()
+        cont_sys.quasi_static_run(0.0, 0.5, 5, verbose=False)
+        n_qs = len(cont_sys.data["Y_s"])
 
-    cont_sys.continuation_run(
-        n_iter=100,
-        ds_default=0.01,
-        ds_smallest=0.001,
-        ds_largest=1.0,
-        verbose=False,
-        checkpoint_freq=0,
-        cont_target=0.0,
-        target_tol=0.05,
-    )
+        cont_sys.continuation_run(
+            n_iter=100,
+            ds_default=0.01,
+            ds_smallest=0.001,
+            ds_largest=1.0,
+            verbose=False,
+            checkpoint_freq=0,
+            cont_target=0.0,
+            target_tol=0.05,
+        )
+    else:
+        cont_sys = PrecomputedSystem("data/demo1_cont.npz")
+        n_qs = 5
 
     cont_seps, cont_forces = get_separation(cont_sys)
     return cont_forces, cont_seps, cont_sys, n_qs

@@ -44,57 +44,68 @@ def _():
     import numpy as np
     import matplotlib.pyplot as plt
     import plotly.graph_objects as go
-    from lammps import lammps
-    from LACT import atom_cont_system
+    from LACT.precomputed import PrecomputedSystem
 
-    return atom_cont_system, go, lammps, mo, np, plt
+    try:
+        from lammps import lammps
+        from LACT import atom_cont_system
+        HAVE_LAMMPS = True
+    except ImportError:
+        lammps = None
+        atom_cont_system = None
+        HAVE_LAMMPS = False
+
+    return HAVE_LAMMPS, PrecomputedSystem, atom_cont_system, go, lammps, mo, np, plt
 
 
 @app.cell
-def _(atom_cont_system, lammps, np):
+def _(HAVE_LAMMPS, atom_cont_system, lammps, np):
     N = 4
     a = 2.0 ** 1.5  # FCC lattice constant
     n_atoms = 255    # 4^3 * 4 - 1 vacancy
     seed = 12345
 
-    def make_crystal():
-        _rng = np.random.default_rng(seed)
-        _lmp = lammps(cmdargs=["-screen", "none"])
-        _lmp.commands_string(
-            f"""
-            units         metal
-            lattice       fcc {a}
-            region        cell block 0 {N} 0 {N} 0 {N} units lattice
-            atom_modify   map yes
-            create_box    2 cell
-            create_atoms  1 region cell
+    if HAVE_LAMMPS:
+        def make_crystal():
+            _rng = np.random.default_rng(seed)
+            _lmp = lammps(cmdargs=["-screen", "none"])
+            _lmp.commands_string(
+                f"""
+                units         metal
+                lattice       fcc {a}
+                region        cell block 0 {N} 0 {N} 0 {N} units lattice
+                atom_modify   map yes
+                create_box    2 cell
+                create_atoms  1 region cell
 
-            pair_style    lj/smooth/linear 6.0
-            pair_coeff    1 1 2.0 2.0 6.0
-            pair_coeff    2 2 2.0 2.0 6.0
-            pair_coeff    1 2 2.0 2.0 6.0
-            mass          * 1.0
+                pair_style    lj/smooth/linear 6.0
+                pair_coeff    1 1 2.0 2.0 6.0
+                pair_coeff    2 2 2.0 2.0 6.0
+                pair_coeff    1 2 2.0 2.0 6.0
+                mass          * 1.0
 
-            region vac block {N//2} {N//2 + 0.25} {N//2} {N//2 + 0.25} {N//2} {N//2 + 0.25} units lattice
-            group  vac region vac
-            delete_atoms group vac
+                region vac block {N//2} {N//2 + 0.25} {N//2} {N//2 + 0.25} {N//2} {N//2 + 0.25} units lattice
+                group  vac region vac
+                delete_atoms group vac
 
-            compute forces all property/atom fx fy fz
-            compute ids all property/atom id
-            """
-        )
+                compute forces all property/atom fx fy fz
+                compute ids all property/atom id
+                """
+            )
 
-        # Randomly assign ~20% of atoms as type 2 (fixed seed)
-        _types = _lmp.numpy.extract_atom("type")
-        _types[_rng.uniform(size=_types.size) < 0.2] = 2
+            # Randomly assign ~20% of atoms as type 2 (fixed seed)
+            _types = _lmp.numpy.extract_atom("type")
+            _types[_rng.uniform(size=_types.size) < 0.2] = 2
 
-        def update_command(mu):
-            return f"""
-            pair_coeff 1 2 2.0 {2.0 * mu} 6.0
-            """
+            def update_command(mu):
+                return f"""
+                pair_coeff 1 2 2.0 {2.0 * mu} 6.0
+                """
 
-        _sys = atom_cont_system(_lmp, update_command)
-        return _sys, _lmp
+            _sys = atom_cont_system(_lmp, update_command)
+            return _sys, _lmp
+    else:
+        make_crystal = None
 
     return make_crystal, n_atoms
 
@@ -129,10 +140,13 @@ def _(mo):
 
 
 @app.cell
-def _(get_crystal_data, make_crystal, np):
-    qs_sys, qs_lmp = make_crystal()
-    qs_sys.quasi_static_run(1.0, 0.001, 200, verbose=False)
-    qs_sys.compute_energies()
+def _(HAVE_LAMMPS, PrecomputedSystem, get_crystal_data, make_crystal, np):
+    if HAVE_LAMMPS:
+        qs_sys, qs_lmp = make_crystal()
+        qs_sys.quasi_static_run(1.0, 0.001, 200, verbose=False)
+        qs_sys.compute_energies()
+    else:
+        qs_sys = PrecomputedSystem("data/demo4_qs.npz")
     qs_mus, qs_disp_norms, qs_max_disps = get_crystal_data(qs_sys)
     qs_energies = np.array(qs_sys.data["energies"])
     return qs_disp_norms, qs_energies, qs_mus, qs_sys
@@ -200,40 +214,46 @@ def seed_continuation(make_crystal, qs_Ys, idx, reverse=False):
 
 
 @app.cell
-def _(make_crystal, qs_sys):
-    # --- Continuation A: seed near first instability, forward ---
-    # Adjust idx_a based on the QS energy plot
-    idx_a = 120
-    sys_a = seed_continuation(make_crystal, qs_sys.data["Y_s"], idx_a, reverse=False)
-    sys_a.continuation_run(
-        n_iter=200,
-        ds_default=0.01,
-        ds_smallest=1e-5,
-        ds_largest=2.0,
-        cont_target=0.95,
-        verbose=False,
-        checkpoint_freq=0,
-    )
-    sys_a.compute_energies()
+def _(HAVE_LAMMPS, PrecomputedSystem, make_crystal, qs_sys):
+    if HAVE_LAMMPS:
+        # --- Continuation A: seed near first instability, forward ---
+        # Adjust idx_a based on the QS energy plot
+        idx_a = 120
+        sys_a = seed_continuation(make_crystal, qs_sys.data["Y_s"], idx_a, reverse=False)
+        sys_a.continuation_run(
+            n_iter=200,
+            ds_default=0.01,
+            ds_smallest=1e-5,
+            ds_largest=2.0,
+            cont_target=0.95,
+            verbose=False,
+            checkpoint_freq=0,
+        )
+        sys_a.compute_energies()
+    else:
+        sys_a = PrecomputedSystem("data/demo4_cont_a.npz")
     return (sys_a,)
 
 
 @app.cell
-def _(make_crystal, qs_sys):
-    # --- Continuation B: seed near first instability, reverse ---
-    # Adjust idx_b based on the QS energy plot
-    idx_b = 135
-    sys_b = seed_continuation(make_crystal, qs_sys.data["Y_s"], idx_b, reverse=True)
-    sys_b.continuation_run(
-        n_iter=200,
-        ds_default=0.01,
-        ds_smallest=1e-5,
-        ds_largest=2.0,
-        cont_target=0.95,
-        verbose=False,
-        checkpoint_freq=0,
-    )
-    sys_b.compute_energies()
+def _(HAVE_LAMMPS, PrecomputedSystem, make_crystal, qs_sys):
+    if HAVE_LAMMPS:
+        # --- Continuation B: seed near first instability, reverse ---
+        # Adjust idx_b based on the QS energy plot
+        idx_b = 135
+        sys_b = seed_continuation(make_crystal, qs_sys.data["Y_s"], idx_b, reverse=True)
+        sys_b.continuation_run(
+            n_iter=200,
+            ds_default=0.01,
+            ds_smallest=1e-5,
+            ds_largest=2.0,
+            cont_target=0.95,
+            verbose=False,
+            checkpoint_freq=0,
+        )
+        sys_b.compute_energies()
+    else:
+        sys_b = PrecomputedSystem("data/demo4_cont_b.npz")
     return (sys_b,)
 
 

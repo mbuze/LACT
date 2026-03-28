@@ -44,10 +44,18 @@ def _():
     import marimo as mo
     import numpy as np
     import matplotlib.pyplot as plt
-    from lammps import lammps
-    from LACT import atom_cont_system
+    from LACT.precomputed import PrecomputedSystem
 
-    return atom_cont_system, lammps, mo, np, plt
+    try:
+        from lammps import lammps
+        from LACT import atom_cont_system
+        HAVE_LAMMPS = True
+    except ImportError:
+        lammps = None
+        atom_cont_system = None
+        HAVE_LAMMPS = False
+
+    return HAVE_LAMMPS, PrecomputedSystem, atom_cont_system, lammps, mo, np, plt
 
 
 @app.cell(hide_code=True)
@@ -107,43 +115,46 @@ def _(mo):
 
 
 @app.cell
-def _(atom_cont_system, lammps):
-    _NX = 4
+def _(HAVE_LAMMPS, atom_cont_system, lammps):
+    if HAVE_LAMMPS:
+        _NX = 4
 
-    def make_crystal():
-        """Create a 2D hex LJ crystal, relaxed to zero stress."""
-        _lmp = lammps(cmdargs=["-screen", "none"])
-        _lmp.commands_string(
-            f"""
-            units         lj
-            dimension     2
-            boundary      p p p
-            atom_style    atomic
-            atom_modify   map yes
-            lattice       hex 0.9165
-            region        box block 0 {_NX} 0 {_NX} -0.5 0.5
-            create_box    1 box
-            create_atoms  1 box
-            mass          1 1.0
-            pair_style    lj/cut 2.5
-            pair_coeff    1 1 1.0 1.0 2.5
-            fix boxrelax all box/relax iso 0.0 vmax 0.001
-            minimize 0 1e-12 50000 50000
-            unfix boxrelax
-            compute forces all property/atom fx fy fz
-            compute ids all property/atom id
-            run 0
-            """
-        )
-        _box = _lmp.extract_box()
-        _xlo, _xhi = _box[0][0], _box[1][0]
-        _Lx = _xhi - _xlo
+        def make_crystal():
+            """Create a 2D hex LJ crystal, relaxed to zero stress."""
+            _lmp = lammps(cmdargs=["-screen", "none"])
+            _lmp.commands_string(
+                f"""
+                units         lj
+                dimension     2
+                boundary      p p p
+                atom_style    atomic
+                atom_modify   map yes
+                lattice       hex 0.9165
+                region        box block 0 {_NX} 0 {_NX} -0.5 0.5
+                create_box    1 box
+                create_atoms  1 box
+                mass          1 1.0
+                pair_style    lj/cut 2.5
+                pair_coeff    1 1 1.0 1.0 2.5
+                fix boxrelax all box/relax iso 0.0 vmax 0.001
+                minimize 0 1e-12 50000 50000
+                unfix boxrelax
+                compute forces all property/atom fx fy fz
+                compute ids all property/atom id
+                run 0
+                """
+            )
+            _box = _lmp.extract_box()
+            _xlo, _xhi = _box[0][0], _box[1][0]
+            _Lx = _xhi - _xlo
 
-        def _update(strain):
-            _dx = _Lx * strain / 2
-            return f"change_box all x final {_xlo+_dx} {_xhi-_dx} units box"
+            def _update(strain):
+                _dx = _Lx * strain / 2
+                return f"change_box all x final {_xlo+_dx} {_xhi-_dx} units box"
 
-        return atom_cont_system(_lmp, _update), _lmp
+            return atom_cont_system(_lmp, _update), _lmp
+    else:
+        make_crystal = None
 
     return (make_crystal,)
 
@@ -212,12 +223,15 @@ def _(mo):
 
 
 @app.cell
-def _(K, make_crystal, strain_max):
-    sys, sys_lmp = make_crystal()
-    increment = strain_max / K
-    sys.quasi_static_run(0.0, increment, K + 1, verbose=False)
+def _(HAVE_LAMMPS, PrecomputedSystem, K, make_crystal, strain_max):
+    if HAVE_LAMMPS:
+        sys, sys_lmp = make_crystal()
+        increment = strain_max / K
+        sys.quasi_static_run(0.0, increment, K + 1, verbose=False)
+        sys.compute_energies()
+    else:
+        sys = PrecomputedSystem("data/demo3_qs.npz")
     qs_Ys = sys.data["Y_s"]
-    sys.compute_energies()
     return qs_Ys, sys
 
 
@@ -260,21 +274,24 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(make_crystal, qs_Ys):
-    sys_a = seed_continuation(make_crystal, qs_Ys, -6, reverse=True)
-    sys_a.continuation_run(
-        n_iter=200,
-        ds_default=0.01,
-        ds_smallest=0.001,
-        ds_largest=0.05,
-        verbose=False,
-        checkpoint_freq=0,
-        cont_target=0.16,
-        target_tol=0.001,
-    )
-    # Trim overshoot past strain_max
-    sys_a.data["Y_s"] = sys_a.data["Y_s"][:-2]
-    sys_a.compute_energies()
+def _(HAVE_LAMMPS, PrecomputedSystem, make_crystal, qs_Ys):
+    if HAVE_LAMMPS:
+        sys_a = seed_continuation(make_crystal, qs_Ys, -6, reverse=True)
+        sys_a.continuation_run(
+            n_iter=200,
+            ds_default=0.01,
+            ds_smallest=0.001,
+            ds_largest=0.05,
+            verbose=False,
+            checkpoint_freq=0,
+            cont_target=0.16,
+            target_tol=0.001,
+        )
+        # Trim overshoot past strain_max
+        sys_a.data["Y_s"] = sys_a.data["Y_s"][:-2]
+        sys_a.compute_energies()
+    else:
+        sys_a = PrecomputedSystem("data/demo3_cont_a.npz")
     return (sys_a,)
 
 
@@ -287,19 +304,22 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(make_crystal, qs_Ys):
-    sys_b = seed_continuation(make_crystal, qs_Ys, 750, reverse=False)
-    sys_b.continuation_run(
-        n_iter=100,
-        ds_default=0.001,
-        ds_smallest=0.001,
-        ds_largest=0.005,
-        verbose=False,
-        checkpoint_freq=0,
-        cont_target=0.16,
-        target_tol=0.005,
-    )
-    sys_b.compute_energies()
+def _(HAVE_LAMMPS, PrecomputedSystem, make_crystal, qs_Ys):
+    if HAVE_LAMMPS:
+        sys_b = seed_continuation(make_crystal, qs_Ys, 750, reverse=False)
+        sys_b.continuation_run(
+            n_iter=100,
+            ds_default=0.001,
+            ds_smallest=0.001,
+            ds_largest=0.005,
+            verbose=False,
+            checkpoint_freq=0,
+            cont_target=0.16,
+            target_tol=0.005,
+        )
+        sys_b.compute_energies()
+    else:
+        sys_b = PrecomputedSystem("data/demo3_cont_b.npz")
     return (sys_b,)
 
 

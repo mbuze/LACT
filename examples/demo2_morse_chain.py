@@ -36,14 +36,22 @@ def _():
     import marimo as mo
     import numpy as np
     import matplotlib.pyplot as plt
-    from lammps import lammps
-    from LACT import atom_cont_system
+    from LACT.precomputed import PrecomputedSystem
 
-    return atom_cont_system, lammps, mo, np, plt
+    try:
+        from lammps import lammps
+        from LACT import atom_cont_system
+        HAVE_LAMMPS = True
+    except ImportError:
+        lammps = None
+        atom_cont_system = None
+        HAVE_LAMMPS = False
+
+    return HAVE_LAMMPS, PrecomputedSystem, atom_cont_system, lammps, mo, np, plt
 
 
 @app.cell
-def _(atom_cont_system, lammps):
+def _(HAVE_LAMMPS, atom_cont_system, lammps):
     n_atoms = 6
     alpha = 6.0       # Morse width parameter
     r0 = 1.12         # Morse equilibrium distance
@@ -56,55 +64,58 @@ def _(atom_cont_system, lammps):
         ((5, 6), 1.05),  # strongest
     ]
 
-    def make_chain():
-        _lmp = lammps(cmdargs=["-screen", "none"])
-        _lmp.commands_string(
-            f"""
-            units         lj
-            dimension     3
-            boundary      f f f
-            atom_style    atomic
-            atom_modify   map yes
+    if HAVE_LAMMPS:
+        def make_chain():
+            _lmp = lammps(cmdargs=["-screen", "none"])
+            _lmp.commands_string(
+                f"""
+                units         lj
+                dimension     3
+                boundary      f f f
+                atom_style    atomic
+                atom_modify   map yes
 
-            region box block -50.0 50.0 -50.0 50.0 -50.0 50.0
-            create_box {n_atoms} box
-            mass * 1.0
+                region box block -50.0 50.0 -50.0 50.0 -50.0 50.0
+                create_box {n_atoms} box
+                mass * 1.0
 
-            create_atoms 1 single {0 * r0:.6f} 0.0 0.0
-            create_atoms 2 single {1 * r0:.6f} 0.0 0.0
-            create_atoms 3 single {2 * r0:.6f} 0.0 0.0
-            create_atoms 4 single {3 * r0:.6f} 0.0 0.0
-            create_atoms 5 single {4 * r0:.6f} 0.0 0.0
-            create_atoms 6 single {5 * r0:.6f} 0.0 0.0
-            reset_atom_ids sort yes
+                create_atoms 1 single {0 * r0:.6f} 0.0 0.0
+                create_atoms 2 single {1 * r0:.6f} 0.0 0.0
+                create_atoms 3 single {2 * r0:.6f} 0.0 0.0
+                create_atoms 4 single {3 * r0:.6f} 0.0 0.0
+                create_atoms 5 single {4 * r0:.6f} 0.0 0.0
+                create_atoms 6 single {5 * r0:.6f} 0.0 0.0
+                reset_atom_ids sort yes
 
-            pair_style morse 5.0
-            pair_coeff * * 0.001 {alpha} {r0} 0.001
-            pair_coeff 1 2 {bond_info[0][1]} {alpha} {r0} 5.0
-            pair_coeff 2 3 {bond_info[1][1]} {alpha} {r0} 5.0
-            pair_coeff 3 4 {bond_info[2][1]} {alpha} {r0} 5.0
-            pair_coeff 4 5 {bond_info[3][1]} {alpha} {r0} 5.0
-            pair_coeff 5 6 {bond_info[4][1]} {alpha} {r0} 5.0
+                pair_style morse 5.0
+                pair_coeff * * 0.001 {alpha} {r0} 0.001
+                pair_coeff 1 2 {bond_info[0][1]} {alpha} {r0} 5.0
+                pair_coeff 2 3 {bond_info[1][1]} {alpha} {r0} 5.0
+                pair_coeff 3 4 {bond_info[2][1]} {alpha} {r0} 5.0
+                pair_coeff 4 5 {bond_info[3][1]} {alpha} {r0} 5.0
+                pair_coeff 5 6 {bond_info[4][1]} {alpha} {r0} 5.0
 
-            group left_end id 1
-            group right_end id 6
-            fix freeze left_end setforce 0.0 0.0 0.0
-            fix pull right_end addforce 0.0 0.0 0.0
-            fix_modify pull energy yes
+                group left_end id 1
+                group right_end id 6
+                fix freeze left_end setforce 0.0 0.0 0.0
+                fix pull right_end addforce 0.0 0.0 0.0
+                fix_modify pull energy yes
 
-            compute forces all property/atom fx fy fz
-            compute ids all property/atom id
-            """
-        )
+                compute forces all property/atom fx fy fz
+                compute ids all property/atom id
+                """
+            )
 
-        def update_command(force):
-            return f"""
-            unfix pull
-            fix pull right_end addforce {force} 0.0 0.0
-            fix_modify pull energy yes
-            """
+            def update_command(force):
+                return f"""
+                unfix pull
+                fix pull right_end addforce {force} 0.0 0.0
+                fix_modify pull energy yes
+                """
 
-        return atom_cont_system(_lmp, update_command)
+            return atom_cont_system(_lmp, update_command)
+    else:
+        make_chain = None
 
     return alpha, bond_info, make_chain, n_atoms, r0
 
@@ -141,13 +152,16 @@ def _(mo):
 
 
 @app.cell
-def _(get_chain_data, make_chain):
-    qs_sys = make_chain()
-    try:
-        qs_sys.quasi_static_run(0.0, 0.02, 200, verbose=False)
-    except Exception:
-        print("fail")
-        pass  # LAMMPS crashes past the fold — keep the points we got
+def _(HAVE_LAMMPS, PrecomputedSystem, get_chain_data, make_chain):
+    if HAVE_LAMMPS:
+        qs_sys = make_chain()
+        try:
+            qs_sys.quasi_static_run(0.0, 0.02, 200, verbose=False)
+        except Exception:
+            print("fail")
+            pass  # LAMMPS crashes past the fold — keep the points we got
+    else:
+        qs_sys = PrecomputedSystem("data/demo2_qs.npz")
     qs_extensions, qs_forces, qs_bonds = get_chain_data(qs_sys)
     return qs_bonds, qs_extensions, qs_forces, qs_sys
 
@@ -165,21 +179,25 @@ def _(mo):
 
 
 @app.cell
-def _(get_chain_data, make_chain):
-    cont_sys = make_chain()
-    cont_sys.quasi_static_run(0.0, 0.5, 5, verbose=False)
-    n_qs = len(cont_sys.data["Y_s"])
+def _(HAVE_LAMMPS, PrecomputedSystem, get_chain_data, make_chain):
+    if HAVE_LAMMPS:
+        cont_sys = make_chain()
+        cont_sys.quasi_static_run(0.0, 0.5, 5, verbose=False)
+        n_qs = len(cont_sys.data["Y_s"])
 
-    cont_sys.continuation_run(
-        n_iter=200,
-        ds_default=0.01,
-        ds_smallest=0.001,
-        ds_largest=0.05,
-        verbose=False,
-        checkpoint_freq=0,
-        cont_target=0.5,
-        target_tol=0.1,
-    )
+        cont_sys.continuation_run(
+            n_iter=200,
+            ds_default=0.01,
+            ds_smallest=0.001,
+            ds_largest=0.05,
+            verbose=False,
+            checkpoint_freq=0,
+            cont_target=0.5,
+            target_tol=0.1,
+        )
+    else:
+        cont_sys = PrecomputedSystem("data/demo2_cont.npz")
+        n_qs = 5
 
     cont_extensions, cont_forces, cont_bonds = get_chain_data(cont_sys)
     return cont_bonds, cont_extensions, cont_forces, cont_sys, n_qs

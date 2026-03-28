@@ -34,15 +34,31 @@ jobs:
         shell: micromamba-shell {0}
         run: pip install .
 
-      - name: Export notebooks to HTML
+      - name: Pre-compute notebook data
+        shell: micromamba-shell {0}
+        run: python examples/precompute.py
+
+      - name: Export notebooks to static HTML
         shell: micromamba-shell {0}
         run: |
           mkdir -p _site
           for nb in examples/demo*.py; do
             name=$(basename "$nb" .py)
-            echo "Exporting $nb ..."
+            echo "Exporting $nb (static) ..."
             marimo export html "$nb" -o "_site/${name}.html"
           done
+
+      - name: Export notebooks to interactive WASM HTML
+        shell: micromamba-shell {0}
+        run: |
+          for nb in examples/demo*.py; do
+            name=$(basename "$nb" .py)
+            echo "Exporting $nb (WASM) ..."
+            marimo export html-wasm "$nb" -o "_site/${name}.wasm.html" --mode run --no-show-code
+          done
+
+      - name: Copy data files for WASM notebooks
+        run: cp -r examples/data _site/data
 
       - name: Generate index page
         run: cp docs/index.html _site/index.html
