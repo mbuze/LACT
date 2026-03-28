@@ -55,7 +55,8 @@ def quasi_static_run(comm):
         """
         return command
 
-    def update_command_box_x(x,box_size):
+    box_size = lmp.extract_box()
+    def update_command_box_x(x):
         direction = "x"
         i = 0 if direction=="x" else 1 if direction=="y" else 2
         return change_box_command([box_size[0][i]+x,box_size[1][i]-x],direction=direction)
