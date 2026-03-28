@@ -36,7 +36,23 @@ def _():
     import marimo as mo
     import numpy as np
     import matplotlib.pyplot as plt
-    from LACT.precomputed import PrecomputedSystem
+    try:
+        from LACT.precomputed import PrecomputedSystem
+    except ImportError:
+        import sys as _sys, io as _io
+
+        class PrecomputedSystem:
+            def __init__(self, path_or_url):
+                if "pyodide" in _sys.modules:
+                    from pyodide.http import open_url
+                    _d = np.load(_io.BytesIO(open_url(path_or_url).read()), allow_pickle=False)
+                else:
+                    _d = np.load(path_or_url, allow_pickle=False)
+                self.natoms = int(_d["natoms"])
+                self.U_0 = _d["U_0"]
+                self.data = {"Y_s": list(_d["Y_s"]), "ds_s": list(_d["ds_s"]) if "ds_s" in _d else []}
+                if "energies" in _d:
+                    self.data["energies"] = list(_d["energies"])
 
     try:
         from lammps import lammps

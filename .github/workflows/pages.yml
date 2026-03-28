@@ -45,7 +45,7 @@ jobs:
           for nb in examples/demo*.py; do
             name=$(basename "$nb" .py)
             echo "Exporting $nb (static) ..."
-            marimo export html "$nb" -o "_site/${name}.html"
+            marimo export html "$nb" --no-include-code -o "_site/${name}.html"
           done
 
       - name: Export notebooks to interactive WASM HTML
