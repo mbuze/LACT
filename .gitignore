@@ -9,6 +9,7 @@ LACT.egg-info/
 scripts/
 
 examples/data/
+examples/public/
 
 notebooks/not_to_be_uploaded/
 CLAUDE.md

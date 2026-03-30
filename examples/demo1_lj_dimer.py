@@ -1,3 +1,13 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "marimo",
+#     "numpy",
+#     "matplotlib",
+#     "marimo-precompute>=0.2.3",
+# ]
+# ///
+
 import marimo
 
 __generated_with = "0.21.1"
@@ -39,20 +49,10 @@ def _():
     import marimo as mo
     import numpy as np
     import matplotlib.pyplot as plt
+    from marimo_precompute import persistent_cache, prefetch_all
     try:
         from LACT.precomputed import PrecomputedSystem
-        load_json = None
     except ImportError:
-        import json as _json
-
-        async def load_json(url):
-            from pyodide.http import pyfetch
-            from js import self as _js_self
-            # Worker runs from assets/ subdir, go up to site root
-            base = str(_js_self.location.href).rsplit("/", 2)[0] + "/"
-            resp = await pyfetch(base + url)
-            return _json.loads(await resp.string())
-
         class PrecomputedSystem:
             def __init__(self, d):
                 self.natoms = int(d["natoms"])
@@ -61,21 +61,22 @@ def _():
                 if "energies" in d:
                     self.data["energies"] = list(d["energies"])
 
-    try:
-        from lammps import lammps
-        from LACT import atom_cont_system
-        HAVE_LAMMPS = True
-    except ImportError:
-        lammps = None
-        atom_cont_system = None
-        HAVE_LAMMPS = False
-
-    return HAVE_LAMMPS, PrecomputedSystem, atom_cont_system, lammps, load_json, mo, np, plt
+    return PrecomputedSystem, mo, np, persistent_cache, prefetch_all, plt
 
 
 @app.cell
-def _(HAVE_LAMMPS, atom_cont_system, lammps):
-    if HAVE_LAMMPS:
+async def _(prefetch_all):
+    await prefetch_all()
+    return
+
+
+@app.cell
+def _():
+    make_dimer = None
+    try:
+        from lammps import lammps
+        from LACT import atom_cont_system
+
         def make_dimer():
             _lmp = lammps(cmdargs=["-screen", "none"])
             _lmp.commands_string(
@@ -117,8 +118,8 @@ def _(HAVE_LAMMPS, atom_cont_system, lammps):
                 """
 
             return atom_cont_system(_lmp, update_command)
-    else:
-        make_dimer = None
+    except ImportError:
+        pass
 
     return (make_dimer,)
 
@@ -155,12 +156,14 @@ def _(mo):
 
 
 @app.cell
-async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, get_separation, make_dimer):
-    if HAVE_LAMMPS:
-        qs_sys = make_dimer()
-        qs_sys.quasi_static_run(0.0, 0.1, 30, verbose=False)
-    else:
-        qs_sys = PrecomputedSystem(await load_json("data/demo1_qs.json"))
+def _(PrecomputedSystem, get_separation, make_dimer, persistent_cache):
+    def _run_qs():
+        _s = make_dimer()
+        _s.quasi_static_run(0.0, 0.1, 30, verbose=False)
+        return {"natoms": _s.natoms, "U_0": _s.U_0, "Y_s": _s.data["Y_s"]}
+    with persistent_cache(name="demo1_qs"):
+        qs_data = _run_qs()
+    qs_sys = PrecomputedSystem(qs_data)
     qs_seps, qs_forces = get_separation(qs_sys)
     return qs_forces, qs_seps, qs_sys
 
@@ -177,13 +180,12 @@ def _(mo):
 
 
 @app.cell
-async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, get_separation, make_dimer):
-    if HAVE_LAMMPS:
-        cont_sys = make_dimer()
-        cont_sys.quasi_static_run(0.0, 0.5, 5, verbose=False)
-        n_qs = len(cont_sys.data["Y_s"])
-
-        cont_sys.continuation_run(
+def _(PrecomputedSystem, get_separation, make_dimer, persistent_cache):
+    def _run_cont():
+        _s = make_dimer()
+        _s.quasi_static_run(0.0, 0.5, 5, verbose=False)
+        _n_qs = len(_s.data["Y_s"])
+        _s.continuation_run(
             n_iter=100,
             ds_default=0.01,
             ds_smallest=0.001,
@@ -193,10 +195,14 @@ async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, get_separation, make_dime
             cont_target=0.0,
             target_tol=0.05,
         )
-    else:
-        cont_sys = PrecomputedSystem(await load_json("data/demo1_cont.json"))
-        n_qs = 5
-
+        return {
+            "natoms": _s.natoms, "U_0": _s.U_0,
+            "Y_s": _s.data["Y_s"], "n_qs": _n_qs,
+        }
+    with persistent_cache(name="demo1_cont"):
+        cont_data = _run_cont()
+    cont_sys = PrecomputedSystem(cont_data)
+    n_qs = cont_data["n_qs"]
     cont_seps, cont_forces = get_separation(cont_sys)
     return cont_forces, cont_seps, cont_sys, n_qs
 
