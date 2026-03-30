@@ -1,3 +1,13 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "marimo",
+#     "numpy",
+#     "matplotlib",
+#     "marimo-precompute>=0.2.3",
+# ]
+# ///
+
 import marimo
 
 __generated_with = "0.21.1"
@@ -44,19 +54,10 @@ def _():
     import marimo as mo
     import numpy as np
     import matplotlib.pyplot as plt
+    from marimo_precompute import persistent_cache, prefetch_all
     try:
         from LACT.precomputed import PrecomputedSystem
-        load_json = None
     except ImportError:
-        import json as _json
-
-        async def load_json(url):
-            from pyodide.http import pyfetch
-            from js import self as _js_self
-            base = str(_js_self.location.href).rsplit("/", 2)[0] + "/"
-            resp = await pyfetch(base + url)
-            return _json.loads(await resp.string())
-
         class PrecomputedSystem:
             def __init__(self, d):
                 self.natoms = int(d["natoms"])
@@ -65,16 +66,13 @@ def _():
                 if "energies" in d:
                     self.data["energies"] = list(d["energies"])
 
-    try:
-        from lammps import lammps
-        from LACT import atom_cont_system
-        HAVE_LAMMPS = True
-    except ImportError:
-        lammps = None
-        atom_cont_system = None
-        HAVE_LAMMPS = False
+    return PrecomputedSystem, mo, np, persistent_cache, prefetch_all, plt
 
-    return HAVE_LAMMPS, PrecomputedSystem, atom_cont_system, lammps, load_json, mo, np, plt
+
+@app.cell
+async def _(prefetch_all):
+    await prefetch_all()
+    return
 
 
 @app.cell(hide_code=True)
@@ -134,8 +132,12 @@ def _(mo):
 
 
 @app.cell
-def _(HAVE_LAMMPS, atom_cont_system, lammps):
-    if HAVE_LAMMPS:
+def _():
+    make_crystal = None
+    try:
+        from lammps import lammps
+        from LACT import atom_cont_system
+
         _NX = 4
 
         def make_crystal():
@@ -172,8 +174,8 @@ def _(HAVE_LAMMPS, atom_cont_system, lammps):
                 return f"change_box all x final {_xlo+_dx} {_xhi-_dx} units box"
 
             return atom_cont_system(_lmp, _update), _lmp
-    else:
-        make_crystal = None
+    except ImportError:
+        pass
 
     return (make_crystal,)
 
@@ -242,14 +244,19 @@ def _(mo):
 
 
 @app.cell
-async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, K, make_crystal, strain_max):
-    if HAVE_LAMMPS:
-        sys, sys_lmp = make_crystal()
-        increment = strain_max / K
-        sys.quasi_static_run(0.0, increment, K + 1, verbose=False)
-        sys.compute_energies()
-    else:
-        sys = PrecomputedSystem(await load_json("data/demo3_qs.json"))
+def _(PrecomputedSystem, K, make_crystal, persistent_cache, strain_max):
+    def _run_qs():
+        _s, _lmp = make_crystal()
+        _increment = strain_max / K
+        _s.quasi_static_run(0.0, _increment, K + 1, verbose=False)
+        _s.compute_energies()
+        return {
+            "natoms": _s.natoms, "U_0": _s.U_0,
+            "Y_s": _s.data["Y_s"], "energies": _s.data["energies"],
+        }
+    with persistent_cache(name="demo3_qs"):
+        qs_data = _run_qs()
+    sys = PrecomputedSystem(qs_data)
     qs_Ys = sys.data["Y_s"]
     return qs_Ys, sys
 
@@ -293,10 +300,10 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, make_crystal, qs_Ys):
-    if HAVE_LAMMPS:
-        sys_a = seed_continuation(make_crystal, qs_Ys, -6, reverse=True)
-        sys_a.continuation_run(
+def _(PrecomputedSystem, make_crystal, persistent_cache, qs_Ys):
+    def _run_cont_a():
+        _s = seed_continuation(make_crystal, qs_Ys, -6, reverse=True)
+        _s.continuation_run(
             n_iter=200,
             ds_default=0.01,
             ds_smallest=0.001,
@@ -306,11 +313,15 @@ async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, make_crystal, qs_Ys):
             cont_target=0.16,
             target_tol=0.001,
         )
-        # Trim overshoot past strain_max
-        sys_a.data["Y_s"] = sys_a.data["Y_s"][:-2]
-        sys_a.compute_energies()
-    else:
-        sys_a = PrecomputedSystem(await load_json("data/demo3_cont_a.json"))
+        _s.data["Y_s"] = _s.data["Y_s"][:-2]
+        _s.compute_energies()
+        return {
+            "natoms": _s.natoms, "U_0": _s.U_0,
+            "Y_s": _s.data["Y_s"], "energies": _s.data["energies"],
+        }
+    with persistent_cache(name="demo3_cont_a"):
+        cont_a_data = _run_cont_a()
+    sys_a = PrecomputedSystem(cont_a_data)
     return (sys_a,)
 
 
@@ -323,10 +334,10 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, make_crystal, qs_Ys):
-    if HAVE_LAMMPS:
-        sys_b = seed_continuation(make_crystal, qs_Ys, 750, reverse=False)
-        sys_b.continuation_run(
+def _(PrecomputedSystem, make_crystal, persistent_cache, qs_Ys):
+    def _run_cont_b():
+        _s = seed_continuation(make_crystal, qs_Ys, 750, reverse=False)
+        _s.continuation_run(
             n_iter=100,
             ds_default=0.001,
             ds_smallest=0.001,
@@ -336,9 +347,14 @@ async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, make_crystal, qs_Ys):
             cont_target=0.16,
             target_tol=0.005,
         )
-        sys_b.compute_energies()
-    else:
-        sys_b = PrecomputedSystem(await load_json("data/demo3_cont_b.json"))
+        _s.compute_energies()
+        return {
+            "natoms": _s.natoms, "U_0": _s.U_0,
+            "Y_s": _s.data["Y_s"], "energies": _s.data["energies"],
+        }
+    with persistent_cache(name="demo3_cont_b"):
+        cont_b_data = _run_cont_b()
+    sys_b = PrecomputedSystem(cont_b_data)
     return (sys_b,)
 
 

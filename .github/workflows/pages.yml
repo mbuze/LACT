@@ -30,15 +30,11 @@ jobs:
           channels: conda-forge
           cache-environment: true
 
-      - name: Install LACT
+      - name: Install LACT and marimo-precompute
         shell: micromamba-shell {0}
-        run: pip install .
+        run: pip install . marimo-precompute
 
-      - name: Pre-compute notebook data
-        shell: micromamba-shell {0}
-        run: python examples/precompute.py
-
-      - name: Export notebooks to static HTML
+      - name: Export notebooks to static HTML (runs LAMMPS + caches results)
         shell: micromamba-shell {0}
         run: |
           mkdir -p _site
@@ -56,9 +52,6 @@ jobs:
             echo "Exporting $nb (WASM) ..."
             marimo export html-wasm "$nb" -o "_site/${name}.wasm.html" --mode run --no-show-code
           done
-
-      - name: Copy data files for WASM notebooks
-        run: cp -r examples/data _site/data
 
       - name: Generate index page
         run: cp docs/index.html _site/index.html

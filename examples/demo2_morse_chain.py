@@ -1,3 +1,13 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "marimo",
+#     "numpy",
+#     "matplotlib",
+#     "marimo-precompute>=0.2.3",
+# ]
+# ///
+
 import marimo
 
 __generated_with = "0.21.1"
@@ -36,19 +46,10 @@ def _():
     import marimo as mo
     import numpy as np
     import matplotlib.pyplot as plt
+    from marimo_precompute import persistent_cache, prefetch_all
     try:
         from LACT.precomputed import PrecomputedSystem
-        load_json = None
     except ImportError:
-        import json as _json
-
-        async def load_json(url):
-            from pyodide.http import pyfetch
-            from js import self as _js_self
-            base = str(_js_self.location.href).rsplit("/", 2)[0] + "/"
-            resp = await pyfetch(base + url)
-            return _json.loads(await resp.string())
-
         class PrecomputedSystem:
             def __init__(self, d):
                 self.natoms = int(d["natoms"])
@@ -57,20 +58,17 @@ def _():
                 if "energies" in d:
                     self.data["energies"] = list(d["energies"])
 
-    try:
-        from lammps import lammps
-        from LACT import atom_cont_system
-        HAVE_LAMMPS = True
-    except ImportError:
-        lammps = None
-        atom_cont_system = None
-        HAVE_LAMMPS = False
-
-    return HAVE_LAMMPS, PrecomputedSystem, atom_cont_system, lammps, load_json, mo, np, plt
+    return PrecomputedSystem, mo, np, persistent_cache, prefetch_all, plt
 
 
 @app.cell
-def _(HAVE_LAMMPS, atom_cont_system, lammps):
+async def _(prefetch_all):
+    await prefetch_all()
+    return
+
+
+@app.cell
+def _():
     n_atoms = 6
     alpha = 6.0       # Morse width parameter
     r0 = 1.12         # Morse equilibrium distance
@@ -83,7 +81,11 @@ def _(HAVE_LAMMPS, atom_cont_system, lammps):
         ((5, 6), 1.05),  # strongest
     ]
 
-    if HAVE_LAMMPS:
+    make_chain = None
+    try:
+        from lammps import lammps
+        from LACT import atom_cont_system
+
         def make_chain():
             _lmp = lammps(cmdargs=["-screen", "none"])
             _lmp.commands_string(
@@ -133,8 +135,8 @@ def _(HAVE_LAMMPS, atom_cont_system, lammps):
                 """
 
             return atom_cont_system(_lmp, update_command)
-    else:
-        make_chain = None
+    except ImportError:
+        pass
 
     return alpha, bond_info, make_chain, n_atoms, r0
 
@@ -171,16 +173,17 @@ def _(mo):
 
 
 @app.cell
-async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, get_chain_data, make_chain):
-    if HAVE_LAMMPS:
-        qs_sys = make_chain()
+def _(PrecomputedSystem, get_chain_data, make_chain, persistent_cache):
+    def _run_qs():
+        _s = make_chain()
         try:
-            qs_sys.quasi_static_run(0.0, 0.02, 200, verbose=False)
+            _s.quasi_static_run(0.0, 0.02, 200, verbose=False)
         except Exception:
-            print("fail")
             pass  # LAMMPS crashes past the fold — keep the points we got
-    else:
-        qs_sys = PrecomputedSystem(await load_json("data/demo2_qs.json"))
+        return {"natoms": _s.natoms, "U_0": _s.U_0, "Y_s": _s.data["Y_s"]}
+    with persistent_cache(name="demo2_qs"):
+        qs_data = _run_qs()
+    qs_sys = PrecomputedSystem(qs_data)
     qs_extensions, qs_forces, qs_bonds = get_chain_data(qs_sys)
     return qs_bonds, qs_extensions, qs_forces, qs_sys
 
@@ -198,13 +201,12 @@ def _(mo):
 
 
 @app.cell
-async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, get_chain_data, make_chain):
-    if HAVE_LAMMPS:
-        cont_sys = make_chain()
-        cont_sys.quasi_static_run(0.0, 0.5, 5, verbose=False)
-        n_qs = len(cont_sys.data["Y_s"])
-
-        cont_sys.continuation_run(
+def _(PrecomputedSystem, get_chain_data, make_chain, persistent_cache):
+    def _run_cont():
+        _s = make_chain()
+        _s.quasi_static_run(0.0, 0.5, 5, verbose=False)
+        _n_qs = len(_s.data["Y_s"])
+        _s.continuation_run(
             n_iter=200,
             ds_default=0.01,
             ds_smallest=0.001,
@@ -214,10 +216,14 @@ async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, get_chain_data, make_chai
             cont_target=0.5,
             target_tol=0.1,
         )
-    else:
-        cont_sys = PrecomputedSystem(await load_json("data/demo2_cont.json"))
-        n_qs = 5
-
+        return {
+            "natoms": _s.natoms, "U_0": _s.U_0,
+            "Y_s": _s.data["Y_s"], "n_qs": _n_qs,
+        }
+    with persistent_cache(name="demo2_cont"):
+        cont_data = _run_cont()
+    cont_sys = PrecomputedSystem(cont_data)
+    n_qs = cont_data["n_qs"]
     cont_extensions, cont_forces, cont_bonds = get_chain_data(cont_sys)
     return cont_bonds, cont_extensions, cont_forces, cont_sys, n_qs
 
