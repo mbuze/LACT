@@ -5,6 +5,7 @@
 #     "numpy",
 #     "matplotlib",
 #     "plotly",
+#     "marimo-precompute",
 # ]
 # ///
 
@@ -54,19 +55,10 @@ def _():
     import numpy as np
     import matplotlib.pyplot as plt
     import plotly.graph_objects as go
+    from marimo_precompute import persistent_cache, prefetch_all
     try:
         from LACT.precomputed import PrecomputedSystem
-        load_json = None
     except ImportError:
-        import json as _json
-
-        async def load_json(url):
-            from pyodide.http import pyfetch
-            from js import self as _js_self
-            base = str(_js_self.location.href).rsplit("/", 2)[0] + "/"
-            resp = await pyfetch(base + url)
-            return _json.loads(await resp.string())
-
         class PrecomputedSystem:
             def __init__(self, d):
                 self.natoms = int(d["natoms"])
@@ -75,26 +67,27 @@ def _():
                 if "energies" in d:
                     self.data["energies"] = list(d["energies"])
 
-    try:
-        from lammps import lammps
-        from LACT import atom_cont_system
-        HAVE_LAMMPS = True
-    except ImportError:
-        lammps = None
-        atom_cont_system = None
-        HAVE_LAMMPS = False
-
-    return HAVE_LAMMPS, PrecomputedSystem, atom_cont_system, go, lammps, load_json, mo, np, plt
+    return PrecomputedSystem, go, mo, np, persistent_cache, prefetch_all, plt
 
 
 @app.cell
-def _(HAVE_LAMMPS, atom_cont_system, lammps, np):
+async def _(prefetch_all):
+    await prefetch_all()
+    return
+
+
+@app.cell
+def _(np):
     N = 4
     a = 2.0 ** 1.5  # FCC lattice constant
     n_atoms = 255    # 4^3 * 4 - 1 vacancy
     seed = 12345
 
-    if HAVE_LAMMPS:
+    make_crystal = None
+    try:
+        from lammps import lammps
+        from LACT import atom_cont_system
+
         def make_crystal():
             _rng = np.random.default_rng(seed)
             _lmp = lammps(cmdargs=["-screen", "none"])
@@ -133,8 +126,8 @@ def _(HAVE_LAMMPS, atom_cont_system, lammps, np):
 
             _sys = atom_cont_system(_lmp, update_command)
             return _sys, _lmp
-    else:
-        make_crystal = None
+    except ImportError:
+        pass
 
     return make_crystal, n_atoms
 
@@ -169,13 +162,18 @@ def _(mo):
 
 
 @app.cell
-async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, get_crystal_data, make_crystal, np):
-    if HAVE_LAMMPS:
-        qs_sys, qs_lmp = make_crystal()
-        qs_sys.quasi_static_run(1.0, 0.001, 200, verbose=False)
-        qs_sys.compute_energies()
-    else:
-        qs_sys = PrecomputedSystem(await load_json("data/demo4_qs.json"))
+def _(PrecomputedSystem, get_crystal_data, make_crystal, np, persistent_cache):
+    def _run_qs():
+        _s, _lmp = make_crystal()
+        _s.quasi_static_run(1.0, 0.001, 200, verbose=False)
+        _s.compute_energies()
+        return {
+            "natoms": _s.natoms, "U_0": _s.U_0,
+            "Y_s": _s.data["Y_s"], "energies": _s.data["energies"],
+        }
+    with persistent_cache(name="demo4_qs"):
+        qs_data = _run_qs()
+    qs_sys = PrecomputedSystem(qs_data)
     qs_mus, qs_disp_norms, qs_max_disps = get_crystal_data(qs_sys)
     qs_energies = np.array(qs_sys.data["energies"])
     return qs_disp_norms, qs_energies, qs_mus, qs_sys
@@ -243,46 +241,40 @@ def seed_continuation(make_crystal, qs_Ys, idx, reverse=False):
 
 
 @app.cell
-async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, make_crystal, qs_sys):
-    if HAVE_LAMMPS:
-        # --- Continuation A: seed near first instability, forward ---
-        # Adjust idx_a based on the QS energy plot
-        idx_a = 120
-        sys_a = seed_continuation(make_crystal, qs_sys.data["Y_s"], idx_a, reverse=False)
-        sys_a.continuation_run(
-            n_iter=200,
-            ds_default=0.01,
-            ds_smallest=1e-5,
-            ds_largest=2.0,
-            cont_target=0.95,
-            verbose=False,
-            checkpoint_freq=0,
+def _(PrecomputedSystem, make_crystal, persistent_cache, qs_sys):
+    def _run_cont_a():
+        _s = seed_continuation(make_crystal, qs_sys.data["Y_s"], 120, reverse=False)
+        _s.continuation_run(
+            n_iter=200, ds_default=0.01, ds_smallest=1e-5, ds_largest=2.0,
+            cont_target=0.95, verbose=False, checkpoint_freq=0,
         )
-        sys_a.compute_energies()
-    else:
-        sys_a = PrecomputedSystem(await load_json("data/demo4_cont_a.json"))
+        _s.compute_energies()
+        return {
+            "natoms": _s.natoms, "U_0": _s.U_0,
+            "Y_s": _s.data["Y_s"], "energies": _s.data["energies"],
+        }
+    with persistent_cache(name="demo4_cont_a"):
+        cont_a_data = _run_cont_a()
+    sys_a = PrecomputedSystem(cont_a_data)
     return (sys_a,)
 
 
 @app.cell
-async def _(HAVE_LAMMPS, PrecomputedSystem, load_json, make_crystal, qs_sys):
-    if HAVE_LAMMPS:
-        # --- Continuation B: seed near first instability, reverse ---
-        # Adjust idx_b based on the QS energy plot
-        idx_b = 135
-        sys_b = seed_continuation(make_crystal, qs_sys.data["Y_s"], idx_b, reverse=True)
-        sys_b.continuation_run(
-            n_iter=200,
-            ds_default=0.01,
-            ds_smallest=1e-5,
-            ds_largest=2.0,
-            cont_target=0.95,
-            verbose=False,
-            checkpoint_freq=0,
+def _(PrecomputedSystem, make_crystal, persistent_cache, qs_sys):
+    def _run_cont_b():
+        _s = seed_continuation(make_crystal, qs_sys.data["Y_s"], 135, reverse=True)
+        _s.continuation_run(
+            n_iter=200, ds_default=0.01, ds_smallest=1e-5, ds_largest=2.0,
+            cont_target=0.95, verbose=False, checkpoint_freq=0,
         )
-        sys_b.compute_energies()
-    else:
-        sys_b = PrecomputedSystem(await load_json("data/demo4_cont_b.json"))
+        _s.compute_energies()
+        return {
+            "natoms": _s.natoms, "U_0": _s.U_0,
+            "Y_s": _s.data["Y_s"], "energies": _s.data["energies"],
+        }
+    with persistent_cache(name="demo4_cont_b"):
+        cont_b_data = _run_cont_b()
+    sys_b = PrecomputedSystem(cont_b_data)
     return (sys_b,)
 
 
