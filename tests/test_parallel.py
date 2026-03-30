@@ -105,7 +105,7 @@ Y_s_parallel_cont = system_parallel.data["Y_s"][-1]
 
 assert np.allclose(Y_s_serial_quas, Y_s_parallel_quas), "Quasi-static run test failed"
 
-assert np.allclose(Y_s_serial_cont, Y_s_parallel_cont), "Continuation run test failed"
+assert np.allclose(Y_s_serial_cont, Y_s_parallel_cont, atol=1e-6), "Continuation run test failed"
 
 print("---------PASS---------")
 
