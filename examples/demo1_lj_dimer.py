@@ -49,10 +49,25 @@ def _():
     import marimo as mo
     import numpy as np
     import matplotlib.pyplot as plt
-    from marimo_precompute import persistent_cache
-    from LACT.precomputed import PrecomputedSystem
+    from marimo_precompute import persistent_cache, prefetch_all
+    try:
+        from LACT.precomputed import PrecomputedSystem
+    except ImportError:
+        class PrecomputedSystem:
+            def __init__(self, d):
+                self.natoms = int(d["natoms"])
+                self.U_0 = np.asarray(d["U_0"])
+                self.data = {"Y_s": [np.asarray(y) for y in d["Y_s"]], "ds_s": list(d.get("ds_s", []))}
+                if "energies" in d:
+                    self.data["energies"] = list(d["energies"])
 
-    return PrecomputedSystem, mo, np, persistent_cache, plt
+    return PrecomputedSystem, mo, np, persistent_cache, prefetch_all, plt
+
+
+@app.cell
+async def _(prefetch_all):
+    await prefetch_all()
+    return
 
 
 @app.cell
