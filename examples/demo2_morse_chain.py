@@ -4,7 +4,7 @@
 #     "marimo",
 #     "numpy",
 #     "matplotlib",
-#     "marimo-precompute>=0.2.2",
+#     "marimo-precompute>=0.2.3",
 # ]
 # ///
 
