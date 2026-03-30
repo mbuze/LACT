@@ -239,7 +239,6 @@ class atom_cont_system:
             # self.lmp.command("dump mindumpy all custom 10 min_dump.lammpstrj id type x y z ix iy iz fx fy fz")
             self.lmp.command('thermo 1')
             self.lmp.command('run 0')
-            self.lmp.command('min_style cg')
             self.lmp.command(f'minimize 0 {ftol} 5000 5000')
             # self.lmp.command("undump mindumpy")
             if k == 0 and reset_u0:
@@ -481,6 +480,7 @@ class atom_cont_system:
                         print("Not enough data to go back. Just reducing step size.")
                 else:
                     self.data["Y_s"] = self.data["Y_s"][:res_at]
+                    self.data["ds_s"] = self.data["ds_s"][:res_at]
                 counter = 0
             else:
                 self.data["Y_s"] += [Y_1.x]
@@ -597,6 +597,7 @@ class atom_cont_system:
         self.simulation_step = metadata[0]
         if metadata[1] != 0.0:
             self.overrule_ds = metadata[1]
+            self.data["ds_s"].append(metadata[1])
 
 
 class atom_cont_system_legacy:
