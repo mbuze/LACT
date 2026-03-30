@@ -96,6 +96,8 @@ pip install marimo
 marimo run examples/demo1_lj_dimer.py
 ```
 
+A static and interactive rendering of the notebooks can be found [here](https://mbuze.github.io/LACT).
+
 ## Parallel runs
 
 LACT detects `mpi4py` at import and falls back to serial if unavailable.
